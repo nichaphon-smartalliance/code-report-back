@@ -1,0 +1,23 @@
+{
+  "name": "code-report-back",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "migrate": "bun src/db/migrate.ts",
+    "seed:users": "bun src/scripts/seed-users.ts",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "hono": "^4.6.14",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14",
+    "@types/pg": "^8.11.10",
+    "typescript": "^5.7.2"
+  }
+}

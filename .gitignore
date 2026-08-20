@@ -80,6 +80,11 @@ typings/
 # dotenv environment variables file
 .env
 .env.test
+.env.local
+
+# seed-users file — holds plaintext passwords (TASK-001 §5). Never commit it.
+seed-users.json
+seed-users.*.json
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache
