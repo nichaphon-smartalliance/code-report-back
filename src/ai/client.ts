@@ -15,7 +15,12 @@
  */
 
 import { AiLayerError } from "./errors.ts";
-import { consoleSink, logAiCall, type LogSink } from "./log.ts";
+import {
+  consoleSink,
+  logAiCall,
+  type AiLogBaseFields,
+  type LogSink,
+} from "./log.ts";
 import type { AiStage } from "./stages.ts";
 
 /** SPEC-001 "Flow 4–6": 120 s per call. */
@@ -82,6 +87,8 @@ export type HttpAiClientOptions = {
   sink?: LogSink;
   /** Overridable so tests do not wait two minutes. */
   timeoutMs?: number;
+  /** Correlation ids merged into every log line (TASK-005 §7). */
+  logBase?: AiLogBaseFields;
 };
 
 /** A failed attempt, classified for the retry decision and the log line. */
@@ -139,6 +146,7 @@ export function createHttpAiClient(options: HttpAiClientOptions): AiClient {
   const timeoutMs = options.timeoutMs ?? AI_TIMEOUT_MS;
   const url = chatUrl(options.baseUrl);
   const headers = chatHeaders(options.token);
+  const logBase = options.logBase ?? {};
 
   async function attempt(request: ChatRequest): Promise<ChatResult | Failure> {
     const controller = new AbortController();
@@ -215,12 +223,14 @@ export function createHttpAiClient(options: HttpAiClientOptions): AiClient {
               latencyMs: outcome.latency_ms,
             },
             sink,
+            logBase,
           );
           return outcome;
         }
         logAiCall(
           { stage: request.stage, attempt: tryNumber, outcome: outcome.outcome },
           sink,
+          logBase,
         );
         last = outcome;
         if (!outcome.retryable) break;

@@ -30,6 +30,23 @@ export type AiCallLogEntry = {
   outcome: "ok" | "timeout" | "http-error" | "service-error" | "network-error";
 };
 
-export function logAiCall(entry: AiCallLogEntry, sink: LogSink): void {
-  sink(redactAll(JSON.stringify({ component: "ai", ...entry }), []));
+/**
+ * Correlation fields merged into the line before it is serialized (TASK-005
+ * §7). SPEC-001 "Logging" wants `jobId` and `userId` on a structured line, and
+ * this layer does not know either — the worker does, so it supplies them here
+ * rather than emitting a second line that a reader would have to join.
+ * Deliberately narrow: two ids, no free text, nothing that could carry a
+ * prompt body.
+ */
+export type AiLogBaseFields = {
+  jobId?: string;
+  userId?: string;
+};
+
+export function logAiCall(
+  entry: AiCallLogEntry,
+  sink: LogSink,
+  base: AiLogBaseFields = {},
+): void {
+  sink(redactAll(JSON.stringify({ component: "ai", ...base, ...entry }), []));
 }

@@ -87,15 +87,15 @@ export function isPrivateAddress(address: string): boolean {
 }
 
 /**
- * Validate the URL the user typed. Returns the parsed URL on success.
+ * Gate 1 on its own: parse the URL and check the scheme, with **no DNS**.
  *
- * The returned href is what gets handed to `git` — never the raw string, so a
- * `\n` or a leading space cannot survive parsing into the argv array.
+ * Split out for TASK-005, which validates the request body synchronously and
+ * answers `400 VALIDATION_ERROR` for a `git@` / `ssh://` / `file://` address
+ * before any job row exists. Gate 2 needs a name resolution and therefore
+ * belongs to the run, not to the request — so the two gates cannot be one
+ * function, and the scheme rule must not be written twice.
  */
-export async function assertSafeRepoUrl(
-  rawUrl: string,
-  options: { allowPrivateHosts: boolean; lookup?: HostLookup | undefined },
-): Promise<URL> {
+export function parseRepoUrl(rawUrl: string): URL {
   let url: URL;
   try {
     url = new URL(rawUrl.trim());
@@ -112,6 +112,21 @@ export async function assertSafeRepoUrl(
       `Only http and https repository addresses are supported (got "${url.protocol.replace(":", "")}").`,
     );
   }
+
+  return url;
+}
+
+/**
+ * Validate the URL the user typed. Returns the parsed URL on success.
+ *
+ * The returned href is what gets handed to `git` — never the raw string, so a
+ * `\n` or a leading space cannot survive parsing into the argv array.
+ */
+export async function assertSafeRepoUrl(
+  rawUrl: string,
+  options: { allowPrivateHosts: boolean; lookup?: HostLookup | undefined },
+): Promise<URL> {
+  const url = parseRepoUrl(rawUrl);
 
   if (options.allowPrivateHosts) return url;
 

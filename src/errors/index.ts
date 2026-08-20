@@ -17,7 +17,7 @@ import {
 } from "./messages.ts";
 
 export type ErrorEnvelope = {
-  error: { code: ErrorCode; message: string };
+  error: { code: ErrorCode; message: string; fields?: Record<string, string> };
 };
 
 export function errorEnvelope(
@@ -26,6 +26,26 @@ export function errorEnvelope(
   params: MessageParams = {},
 ): ErrorEnvelope {
   return { error: { code, message: errorMessage(code, language, params) } };
+}
+
+/**
+ * `400 VALIDATION_ERROR` with its per-field map (TASK-005 §1).
+ *
+ * The map sits **inside** `error`, next to `code` and `message`: that is where
+ * the shipped frontend reads it from (`toApiError` in the frontend's API
+ * client), and SPEC-001's envelope has no second top-level key.
+ */
+export function validationEnvelope(
+  fields: Record<string, string>,
+  language: Language = DEFAULT_LANGUAGE,
+): ErrorEnvelope {
+  return {
+    error: {
+      code: "VALIDATION_ERROR",
+      message: errorMessage("VALIDATION_ERROR", language),
+      fields,
+    },
+  };
 }
 
 /** The language this request wants its error messages in. */

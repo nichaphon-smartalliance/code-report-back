@@ -124,3 +124,75 @@ export function errorMessage(
 ): string {
   return MESSAGES[code][language](params);
 }
+
+/* ------------------------------------------------------------------ *
+ * Per-field validation text (TASK-005 §1)
+ *
+ * `VALIDATION_ERROR` carries a `fields` map whose values the frontend shows
+ * verbatim, so they are user-facing copy and they live here — the single
+ * source of truth this module already is — rather than inline in the
+ * validator. One line per string, both languages, so a reword is a copy edit.
+ * ------------------------------------------------------------------ */
+
+export const VALIDATION_ISSUES = [
+  "REQUIRED",
+  "INVALID_TYPE",
+  "INVALID_URL",
+  "INVALID_DATE",
+  "DATE_ORDER",
+  "SPAN_TOO_LONG",
+  "INVALID_LANGUAGE",
+  "TOO_LONG",
+] as const;
+
+export type ValidationIssue = (typeof VALIDATION_ISSUES)[number];
+
+/** `limit` is used by SPAN_TOO_LONG and TOO_LONG; ignored by the rest. */
+export type FieldMessageParams = { limit?: number };
+
+const FIELD_MESSAGES: Record<
+  ValidationIssue,
+  Record<Language, (params: FieldMessageParams) => string>
+> = {
+  REQUIRED: {
+    th: () => "จำเป็นต้องกรอกข้อมูลนี้",
+    en: () => "This field is required.",
+  },
+  INVALID_TYPE: {
+    th: () => "รูปแบบข้อมูลไม่ถูกต้อง",
+    en: () => "This value has the wrong type.",
+  },
+  INVALID_URL: {
+    th: () => "ต้องเป็นที่อยู่ http หรือ https ที่ถูกต้อง",
+    en: () => "Must be a valid http or https address.",
+  },
+  INVALID_DATE: {
+    th: () => "ต้องเป็นวันที่ในรูปแบบ YYYY-MM-DD",
+    en: () => "Must be a date in YYYY-MM-DD format.",
+  },
+  DATE_ORDER: {
+    th: () => "ต้องไม่อยู่ก่อนวันเริ่มต้น",
+    en: () => "Must not be before dateFrom.",
+  },
+  SPAN_TOO_LONG: {
+    th: ({ limit }) => `ช่วงวันที่ต้องไม่เกิน ${limit ?? 366} วัน`,
+    en: ({ limit }) =>
+      `The period must not be longer than ${limit ?? 366} days.`,
+  },
+  INVALID_LANGUAGE: {
+    th: () => 'ต้องเป็น "th" หรือ "en"',
+    en: () => 'Must be either "th" or "en".',
+  },
+  TOO_LONG: {
+    th: ({ limit }) => `ยาวเกินกำหนด (สูงสุด ${limit ?? 0} ตัวอักษร)`,
+    en: ({ limit }) => `Too long (maximum ${limit ?? 0} characters).`,
+  },
+};
+
+export function fieldMessage(
+  issue: ValidationIssue,
+  language: Language = DEFAULT_LANGUAGE,
+  params: FieldMessageParams = {},
+): string {
+  return FIELD_MESSAGES[issue][language](params);
+}
