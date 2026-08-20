@@ -8,7 +8,8 @@
  * same commits.
  */
 
-import { runGit, type GitRunner } from "./run.ts";
+import { GitLayerError } from "./errors.ts";
+import { firstMeaningfulLine, runGit, type GitRunner } from "./run.ts";
 
 /** A commit touching more than this contributes stats only, no diff body. */
 export const MAX_FILES_FOR_DIFF = 50;
@@ -112,12 +113,17 @@ export function windowBounds(
  * ------------------------------------------------------------------ */
 
 /**
- * `--author` is a regular expression against `Name <email>`. The user typed
- * free text (REQ-001 §4.6), so metacharacters are escaped and the result stays
- * a plain case-insensitive substring match on either name or email.
+ * The user's free text (REQ-001 §4.6), trimmed and **not** escaped.
+ *
+ * git matches `--author` as a POSIX *basic* regex by default, where `+ ? { } ( )
+ * |` are literal until backslashed — so escaping them the JavaScript way turns
+ * plain text into operators and matches the wrong commits (a user filtering by
+ * `somchai+dev@x.co.th` was returned `somchaidev@x.co.th`'s commits and none of
+ * their own). `commitLogArgs` passes `-F`/`--fixed-strings` instead, so free
+ * text is compared as free text and never compiled as a pattern.
  */
-export function authorPattern(author: string): string {
-  return author.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+export function authorNeedle(author: string): string {
+  return author.trim();
 }
 
 /* ------------------------------------------------------------------ *
@@ -206,7 +212,11 @@ export function commitLogArgs(
   if (options.branch !== undefined) args.push(options.branch);
   args.push(`--since=${since}`, `--until=${until}`);
   if (options.author !== undefined && options.author.trim() !== "") {
-    args.push(`--author=${authorPattern(options.author)}`, "--regexp-ignore-case");
+    args.push(
+      "--fixed-strings",
+      `--author=${authorNeedle(options.author)}`,
+      "--regexp-ignore-case",
+    );
   }
   args.push("--no-merges", "--numstat", "--date=iso-strict", `--format=${LOG_FORMAT}`);
   return args;
@@ -237,10 +247,43 @@ export function capDiff(diff: string): { diff: string; truncated: boolean } {
   };
 }
 
+/** git's way of saying the revision it was handed does not exist. */
+const UNKNOWN_REVISION = [
+  /unknown revision or path not in the working tree/i,
+  /ambiguous argument/i,
+  /bad revision/i,
+];
+
+/**
+ * Map a non-zero `git log` onto SPEC-001's error table.
+ *
+ * This must never come back as an empty commit list: zero commits is
+ * `NO_COMMITS`, which SPEC-001 defines as a **success**, so a git failure
+ * returning `[]` would reach the user as a finished report saying no work was
+ * done that day — indistinguishable from a true result.
+ */
+export function classifyLogFailure(
+  stderr: string,
+  options: { branch?: string | undefined },
+): GitLayerError {
+  if (
+    options.branch !== undefined &&
+    UNKNOWN_REVISION.some((pattern) => pattern.test(stderr))
+  ) {
+    return new GitLayerError("BRANCH_NOT_FOUND", { branch: options.branch });
+  }
+  // SPEC-001's "any other git failure". The stderr has already been through
+  // runGit's redactor, so the detail is safe to store and show.
+  return new GitLayerError("CLONE_FAILED", {
+    detail: firstMeaningfulLine(stderr),
+  });
+}
+
 /**
  * The commits in scope, newest first (git's own order), each with its capped
  * diff. Zero commits is a legitimate result, not an error — SPEC-001 turns it
- * into the `NO_COMMITS` status one layer up.
+ * into the `NO_COMMITS` status one layer up. A *failed* `git log`, by contrast,
+ * throws (see `classifyLogFailure`).
  */
 export async function readCommits(
   dir: string,
@@ -248,7 +291,9 @@ export async function readCommits(
 ): Promise<Commit[]> {
   const runner = options.runner ?? runGit;
   const log = await runner(commitLogArgs(dir, options));
-  if (log.exitCode !== 0) return [];
+  if (log.exitCode !== 0) {
+    throw classifyLogFailure(log.stderr, { branch: options.branch });
+  }
 
   const commits = parseCommitLog(log.stdout);
   if (options.includeDiffs === false) return commits;

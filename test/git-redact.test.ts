@@ -39,6 +39,25 @@ describe("redact", () => {
     expect(out).toContain(REDACTED);
   });
 
+  test("the pattern alone removes the whole Authorization value, no runToken", () => {
+    // REWORK 3 / Q-BE-4: `Authorization: [^\s]+` stopped at the space after
+    // "Basic" and left the base64 blob, which decodes back to the PAT. This
+    // asserts the widened pattern on its own — no literal secret is supplied.
+    const header = authorizationHeader(GITHUB_PAT);
+    const base64 = header.slice("Authorization: Basic ".length);
+    const out = redact(`http.extraHeader=${header}\nnext line survives`);
+    expect(out).not.toContain(base64);
+    expect(out).not.toContain(GITHUB_PAT);
+    expect(out).toContain(REDACTED);
+    expect(out).toContain("next line survives");
+  });
+
+  test("the pattern is case-insensitive and covers any scheme", () => {
+    const out = redact("authorization: Bearer some-other-credential");
+    expect(out).not.toContain("some-other-credential");
+    expect(out).toBe(REDACTED);
+  });
+
   test("removes the run token even when it matches no known shape", () => {
     const odd = "not-a-github-shape-but-still-secret";
     const out = redact(`remote: rejected ${odd}`, odd);

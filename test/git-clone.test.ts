@@ -93,10 +93,25 @@ describe("classifyCloneFailure — SPEC-001 error table", () => {
     ).toBe("REPO_AUTH_FAILED");
   });
 
-  test("a PAT was supplied and the remote 404s ⇒ REPO_NOT_FOUND", () => {
+  test("a PAT was supplied and the remote 404s ⇒ REPO_AUTH_FAILED too", () => {
+    // REWORK 4 / Q-BE-5: a valid token whose scope does not cover the repo also
+    // 404s, and SPEC-001's table files "token … insufficient" under
+    // REPO_AUTH_FAILED — only that message names both causes.
     expect(
       classifyCloneFailure("remote: Repository not found.", { hasPat: true }).code,
-    ).toBe("REPO_NOT_FOUND");
+    ).toBe("REPO_AUTH_FAILED");
+  });
+
+  test("'does not appear to be a git repository' stays REPO_NOT_FOUND", () => {
+    // The unambiguous case: the remote answered, and it is not a repository.
+    for (const hasPat of [true, false]) {
+      expect(
+        classifyCloneFailure(
+          "fatal: repository 'https://example.com/x/' does not appear to be a git repository",
+          { hasPat },
+        ).code,
+      ).toBe("REPO_NOT_FOUND");
+    }
   });
 
   test("anything else is CLONE_FAILED with the first meaningful line", () => {

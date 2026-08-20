@@ -18,7 +18,11 @@ export const REDACTED = "***REDACTED***";
 const TOKEN_PATTERNS: RegExp[] = [
   /gh[pousr]_[A-Za-z0-9]{20,}/g,
   /glpat-[A-Za-z0-9_-]{20,}/g,
-  /Authorization: [^\s]+/g,
+  // To end of line, case-insensitive (SPEC-001 amended 2026-08-20, Q-BE-4):
+  // `Authorization: [^\s]+` stopped at the first space and left the base64
+  // credential, which decodes straight back to the PAT. The whole value goes,
+  // whatever its scheme and whoever produced it.
+  /Authorization:[^\r\n]*/gi,
 ];
 
 /**

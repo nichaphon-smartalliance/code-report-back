@@ -66,10 +66,21 @@ const AUTH_FAILED = [
   /\b403\b/,
 ];
 
+/**
+ * The remote answered and it is not a repository — unambiguous, so it stays
+ * `REPO_NOT_FOUND`.
+ */
+const NOT_A_REPOSITORY = [/does not appear to be a git repository/i];
+
+/**
+ * A 404 / "not found", which is genuinely ambiguous: a wrong address, a private
+ * repository with no token, or a valid token whose scope does not cover it.
+ * SPEC-001's error table files "token … insufficient" under `REPO_AUTH_FAILED`,
+ * and only that message names both causes.
+ */
 const NOT_FOUND = [
   /repository .* not found/i,
   /\bnot found\b/i,
-  /does not appear to be a git repository/i,
   /\b404\b/,
 ];
 
@@ -80,9 +91,15 @@ function matchesAny(text: string, patterns: RegExp[]): boolean {
 /**
  * Map git's stderr onto SPEC-001's error table.
  *
- * The binding rule: **no PAT supplied and the remote 404s ⇒
- * `REPO_AUTH_FAILED`**, never `REPO_NOT_FOUND` — GitHub answers 404 for a
- * private repository, and telling the user "not found" wastes their afternoon.
+ * The binding rule (SPEC-001 amended 2026-08-20, Q-BE-5): **a 404 ⇒
+ * `REPO_AUTH_FAILED`, with or without a PAT** — GitHub answers 404 both for a
+ * private repository with no token and for a valid token whose scope does not
+ * cover it, and only `REPO_AUTH_FAILED`'s message names both causes.
+ * `REPO_NOT_FOUND` stays for the unambiguous case where the remote answered and
+ * it is not a repository.
+ *
+ * `options.hasPat` is kept because the caller has it and the two paths are one
+ * amendment apart; nothing here branches on it today.
  */
 export function classifyCloneFailure(
   stderr: string,
@@ -94,10 +111,11 @@ export function classifyCloneFailure(
   if (matchesAny(stderr, AUTH_FAILED)) {
     return new GitLayerError("REPO_AUTH_FAILED");
   }
+  if (matchesAny(stderr, NOT_A_REPOSITORY)) {
+    return new GitLayerError("REPO_NOT_FOUND");
+  }
   if (matchesAny(stderr, NOT_FOUND)) {
-    return new GitLayerError(
-      options.hasPat ? "REPO_NOT_FOUND" : "REPO_AUTH_FAILED",
-    );
+    return new GitLayerError("REPO_AUTH_FAILED");
   }
   return new GitLayerError("CLONE_FAILED", {
     detail: firstMeaningfulLine(stderr),

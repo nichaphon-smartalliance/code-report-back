@@ -12,8 +12,9 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { mkdir } from "node:fs/promises";
 import {
-  authorPattern,
+  authorNeedle,
   capDiff,
+  classifyLogFailure,
   commitLogArgs,
   MAX_DIFF_CHARS,
   MAX_FILES_FOR_DIFF,
@@ -35,6 +36,15 @@ const DAY = { dateFrom: "2026-08-07", dateTo: "2026-08-07", timeZone: TZ };
 const SOMCHAI = { authorName: "Somchai Jaidee", authorEmail: "somchai@x.co.th" };
 const MALEE = { authorName: "Malee Wong", authorEmail: "malee@y.co.th" };
 const NOK = { authorName: "Nok Srisai", authorEmail: "nok@z.co.th" };
+/**
+ * REWORK 1: a plus-addressed author and a lookalike without the plus. Under BRE
+ * escaping, `\+` means "one or more of the preceding character", so filtering by
+ * the plus address returned the lookalike's commit and not the user's own. The
+ * local part is deliberately unrelated to the other three authors so the
+ * substring filters above keep testing what they say they test.
+ */
+const DARA_PLUS = { authorName: "Dara Plus", authorEmail: "dara+dev@w.co.th" };
+const DARA_LOOKALIKE = { authorName: "Dara Lookalike", authorEmail: "daradev@w.co.th" };
 
 /** 60 files > the 50-file threshold, so this commit contributes stats only. */
 const MANY_FILES: Record<string, string> = {};
@@ -86,6 +96,18 @@ await mergeBranch(repo, {
     date: "2026-08-07T14:00:00+07:00",
     files: { "src/side.ts": "export const side = 1;\n" },
   },
+});
+await commitFiles(repo, {
+  ...DARA_PLUS,
+  message: "feat: work by the plus address",
+  date: "2026-08-07T15:00:00+07:00",
+  files: { "src/plus.ts": "export const plus = 1;\n" },
+});
+await commitFiles(repo, {
+  ...DARA_LOOKALIKE,
+  message: "feat: work by the lookalike",
+  date: "2026-08-07T16:00:00+07:00",
+  files: { "src/lookalike.ts": "export const lookalike = 1;\n" },
 });
 await commitFiles(repo, {
   ...MALEE,
@@ -158,8 +180,23 @@ describe("filters", () => {
     for (const commit of commits) expect(commit.authorEmail).toBe(MALEE.authorEmail);
   }, 30_000);
 
-  test("author metacharacters are escaped, not interpreted", () => {
-    expect(authorPattern("a.b+c(d)")).toBe("a\\.b\\+c\\(d\\)");
+  test("an author containing '+' matches literally, not as a regex", async () => {
+    // REWORK 1. Escaped for JS but read by git as a POSIX basic regex, `\+`
+    // meant "one or more `i`" and returned the lookalike instead — silently.
+    const commits = await readCommits(repo, {
+      ...DAY,
+      author: DARA_PLUS.authorEmail,
+      includeDiffs: false,
+    });
+    expect(subjects(commits)).toEqual(["feat: work by the plus address"]);
+  }, 30_000);
+
+  test("free text is passed to git unescaped, with --fixed-strings", () => {
+    expect(authorNeedle("  a.b+c(d)  ")).toBe("a.b+c(d)");
+    const args = commitLogArgs(repo, { ...DAY, author: "a.b+c(d)" });
+    expect(args).toContain("--fixed-strings");
+    expect(args).toContain("--author=a.b+c(d)");
+    expect(args).toContain("--regexp-ignore-case");
   });
 
   test("a branch that was never asked for is not passed to git", () => {
@@ -213,4 +250,51 @@ describe("commit contents", () => {
     });
     expect(commits).toEqual([]);
   }, 30_000);
+});
+
+/**
+ * REWORK 2. Zero commits is `NO_COMMITS`, a SPEC-001 **success**, so a failed
+ * `git log` must never come back as an empty list — the user would be shown a
+ * finished report saying no work was done that day.
+ */
+describe("a failed git log is an error, never 'no work in this period'", () => {
+  const failingRunner = (stderr: string) => async () => ({
+    exitCode: 128,
+    stdout: "",
+    stderr,
+    timedOut: false,
+  });
+
+  test("an unknown branch is BRANCH_NOT_FOUND", async () => {
+    const promise = readCommits(repo, {
+      ...DAY,
+      branch: "nope",
+      includeDiffs: false,
+      runner: failingRunner(
+        "fatal: ambiguous argument 'nope': unknown revision or path not in the working tree.",
+      ),
+    });
+    await expect(promise).rejects.toMatchObject({
+      code: "BRANCH_NOT_FOUND",
+      branch: "nope",
+    });
+  });
+
+  test("any other git failure is CLONE_FAILED with the first meaningful line", async () => {
+    const promise = readCommits(repo, {
+      ...DAY,
+      includeDiffs: false,
+      runner: failingRunner("\n\nfatal: bad object HEAD\nmore noise\n"),
+    });
+    await expect(promise).rejects.toMatchObject({
+      code: "CLONE_FAILED",
+      detail: "fatal: bad object HEAD",
+    });
+  });
+
+  test("an unknown-revision message with no branch asked for is not BRANCH_NOT_FOUND", () => {
+    expect(
+      classifyLogFailure("fatal: bad revision 'HEAD'", { branch: undefined }).code,
+    ).toBe("CLONE_FAILED");
+  });
 });
