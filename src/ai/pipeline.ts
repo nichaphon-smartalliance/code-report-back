@@ -4,8 +4,8 @@
  * Stage 2 is **sequential on purpose**: each call is large, the stakeholder's
  * service fans out to third-party providers, and nothing here needs the
  * latency. It also keeps the `stage` callback honest — the worker (TASK-005)
- * persists progress from it, and progress that jumps around is worse than
- * progress that is slow.
+ * persists the stage it reports, and a stage that jumps around is worse than
+ * one that is slow.
  *
  * This module never touches the network directly, never touches the database,
  * and never reads the filesystem: everything arrives as arguments, so the
@@ -25,9 +25,24 @@ import {
 } from "./prompts.ts";
 import type { AiStage } from "./stages.ts";
 
+/**
+ * Where stage 2 has got to, for a caller that wants to show it.
+ *
+ * Deliberately **not** `{current, total}`: SPEC-001 "GET /api/reports/:jobId"
+ * uses those two names for the wire field `progress`, whose `total` is the
+ * number of `status` values (six) — a different quantity entirely. This module
+ * does not own that field and must not hand out something that can be
+ * forwarded onto the wire by mistake. `batch` is present only during
+ * `AI_COMMITS`.
+ */
+export type StagePosition = {
+  batch?: number;
+  batchCount: number;
+};
+
 export type StageCallback = (
   stage: AiStage,
-  progress: { current: number; total: number },
+  position: StagePosition,
 ) => void | Promise<void>;
 
 export type PipelineInput = {
@@ -55,13 +70,13 @@ export async function runPipeline(
 ): Promise<PipelineResult> {
   const { client, params, extraContext } = input;
   const batches = batchCommits(input.commits);
-  // Stage 1, then one step per batch, then stage 3.
-  const total = batches.length + 2;
-  let current = 0;
+  const batchCount = batches.length;
 
-  const announce = async (stage: AiStage): Promise<void> => {
-    current += 1;
-    await input.onStage?.(stage, { current, total });
+  const announce = async (stage: AiStage, batch?: number): Promise<void> => {
+    await input.onStage?.(
+      stage,
+      batch === undefined ? { batchCount } : { batch, batchCount },
+    );
   };
 
   await announce("AI_PROJECT");
@@ -78,7 +93,7 @@ export async function runPipeline(
 
   const batchSummaries: string[] = [];
   for (const [index, batch] of batches.entries()) {
-    await announce("AI_COMMITS");
+    await announce("AI_COMMITS", index + 1);
     const summary = await client.chat({
       stage: "AI_COMMITS",
       messages: stage2Messages({
@@ -108,6 +123,6 @@ export async function runPipeline(
     markdown: report.content,
     profile,
     batchSummaries,
-    calls: total,
+    calls: batchCount + 2,
   };
 }
