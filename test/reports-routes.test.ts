@@ -174,6 +174,28 @@ describe("POST /api/reports", () => {
     expect(Object.keys(stored)).not.toContain("pat");
   });
 
+  test("a repoUrl carrying a credential never reaches jobs.create", async () => {
+    const app = buildApp();
+    const credentialed = `https://x-access-token:${DUMMY_PAT}@github.com/o/r.git`;
+    const response = await app.request("/api/reports", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept-Language": "en" },
+      body: JSON.stringify({ ...VALID_BODY, repoUrl: credentialed }),
+      cookie: await cookieFor(OWNER),
+    });
+
+    expect(response.status).toBe(400);
+    const body = await json(response);
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+    expect(Object.keys(body.error.fields)).toEqual(["repoUrl"]);
+    // The assertion that matters: no row exists, no work started, and the
+    // secret is nowhere in the store or in what we sent back.
+    expect(app.jobs.all()).toHaveLength(0);
+    expect(app.started).toHaveLength(0);
+    expect(app.jobs.dump()).not.toContain(DUMMY_PAT);
+    expect(JSON.stringify(body)).not.toContain(DUMMY_PAT);
+  });
+
   test("a rejected body is 400 VALIDATION_ERROR with a per-field map", async () => {
     const app = buildApp();
     const response = await app.request("/api/reports", {

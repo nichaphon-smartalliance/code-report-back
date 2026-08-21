@@ -71,6 +71,9 @@ describe("repoUrl", () => {
     "ssh://git@github.com/develyst1/x.git",
     "file:///etc/passwd",
     "not a url at all",
+    // A credential in the wrong field — SPEC-001 2026-08-21, TASK-005 rework.
+    "https://x-access-token:ghp_TESTTOKEN0123456789abcdef@github.com/o/r.git",
+    "https://someuser@github.com/o/r.git",
   ]) {
     test(`rejects ${rejected}`, () => {
       expect(issues({ ...VALID, repoUrl: rejected })).toEqual({

@@ -9,6 +9,7 @@ import { describe, expect, test } from "bun:test";
 import {
   assertSafeRepoUrl,
   isPrivateAddress,
+  parseRepoUrl,
   RepoUrlError,
   type HostLookup,
 } from "../src/git/urlSafety.ts";
@@ -44,6 +45,40 @@ describe("scheme gate", () => {
 
   test("rejects a bare path", async () => {
     await expect(safe("/tmp/repo")).rejects.toBeInstanceOf(RepoUrlError);
+  });
+});
+
+describe("userinfo gate (TASK-005 rework, SPEC-001 2026-08-21)", () => {
+  test("rejects user:password@ and never returns the URL", async () => {
+    const url = "https://x-access-token:ghp_TESTTOKEN0123456789abcdef@github.com/o/r.git";
+    // `parseRepoUrl` is the synchronous half the validator calls…
+    expect(() => parseRepoUrl(url)).toThrow(RepoUrlError);
+    try {
+      parseRepoUrl(url);
+      throw new Error("parseRepoUrl accepted a credentialed URL");
+    } catch (error) {
+      expect((error as RepoUrlError).reason).toBe("USERINFO");
+      // The secret is never quoted back in the thrown message.
+      expect((error as Error).message).not.toContain("ghp_TESTTOKEN0123456789abcdef");
+    }
+    // …and the run-time half inherits the rule for free.
+    await expect(safe(url)).rejects.toBeInstanceOf(RepoUrlError);
+  });
+
+  test("rejects a username with no password", async () => {
+    await expect(safe("https://someuser@github.com/o/r.git")).rejects.toThrow(
+      /username or password/i,
+    );
+  });
+
+  test("rejects an empty username with a password", async () => {
+    await expect(safe("https://:s3cret@github.com/o/r.git")).rejects.toThrow(
+      /username or password/i,
+    );
+  });
+
+  test("an ordinary URL with an @ in the path is still accepted", async () => {
+    expect((await safe("https://github.com/o/r%40b.git")).username).toBe("");
   });
 });
 

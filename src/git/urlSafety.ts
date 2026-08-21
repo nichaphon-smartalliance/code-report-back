@@ -3,7 +3,9 @@
  *
  * Two independent gates:
  *   1. scheme — `http`/`https` only. `git@host:path`, `ssh://`, `file://` and
- *      everything else are rejected before any process is spawned.
+ *      everything else are rejected before any process is spawned. The same
+ *      gate rejects a URL carrying userinfo (SPEC-001 "A repo URL carrying
+ *      userinfo is rejected", added 2026-08-21).
  *   2. address — a host that resolves to a loopback / link-local / private
  *      range is rejected unless `ALLOW_PRIVATE_GIT_HOSTS=true` (a self-hosted
  *      GitLab on the LAN is legitimate, so it is configurable, off by default).
@@ -18,7 +20,12 @@ export type HostLookup = (hostname: string) => Promise<ResolvedAddress[]>;
 
 export class RepoUrlError extends Error {
   /** Machine-readable reason, for the caller's validation map. */
-  readonly reason: "SCHEME" | "MALFORMED" | "PRIVATE_HOST" | "UNRESOLVABLE";
+  readonly reason:
+    | "SCHEME"
+    | "MALFORMED"
+    | "USERINFO"
+    | "PRIVATE_HOST"
+    | "UNRESOLVABLE";
 
   constructor(reason: RepoUrlError["reason"], message: string) {
     super(message);
@@ -110,6 +117,19 @@ export function parseRepoUrl(rawUrl: string): URL {
     throw new RepoUrlError(
       "SCHEME",
       `Only http and https repository addresses are supported (got "${url.protocol.replace(":", "")}").`,
+    );
+  }
+
+  // A URL carrying userinfo (`https://user:secret@host/o/r.git`) is a
+  // credential in the wrong field: it would be stored in `report_jobs.repo_url`,
+  // echoed back in `params.repoUrl`, and written into `.git/config` by `git
+  // clone`. Reject rather than strip — a stripped URL would fail to clone a
+  // private repo with no explanation, and the user must be told. The `pat`
+  // field is the only supported way to authenticate.
+  if (url.username !== "" || url.password !== "") {
+    throw new RepoUrlError(
+      "USERINFO",
+      "Repository address must not contain a username or password — use the access-token field instead.",
     );
   }
 
