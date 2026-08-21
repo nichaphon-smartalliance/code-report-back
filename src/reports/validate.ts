@@ -54,8 +54,41 @@ export function parseCalendarDate(value: string): number | undefined {
   return milliseconds;
 }
 
+/**
+ * The date-window rules — a real calendar day each, `dateTo` not before
+ * `dateFrom`, and the **exclusive** ≤366-day span.
+ *
+ * Exported (TASK-017) so `POST /api/repos/committers` applies the *same* bound
+ * rather than a second copy of it: two copies of a bound is how two bounds
+ * drift apart. Behaviour is unchanged — this is the block that used to sit
+ * inline in `validateCreateReport`, moved verbatim.
+ */
+export function applyDateWindowRules(
+  dateFromText: string | undefined,
+  dateToText: string | undefined,
+  issues: FieldIssues,
+): void {
+  let from: number | undefined;
+  let to: number | undefined;
+  if (dateFromText !== undefined) {
+    from = parseCalendarDate(dateFromText);
+    if (from === undefined) issues.dateFrom = { issue: "INVALID_DATE" };
+  }
+  if (dateToText !== undefined) {
+    to = parseCalendarDate(dateToText);
+    if (to === undefined) issues.dateTo = { issue: "INVALID_DATE" };
+  }
+  if (from !== undefined && to !== undefined) {
+    if (to < from) {
+      issues.dateTo = { issue: "DATE_ORDER" };
+    } else if ((to - from) / MS_PER_DAY > MAX_SPAN_DAYS) {
+      issues.dateTo = { issue: "SPAN_TOO_LONG", limit: MAX_SPAN_DAYS };
+    }
+  }
+}
+
 /** An optional free-text field: absent, or a non-empty trimmed string. */
-function optionalText(
+export function optionalText(
   raw: unknown,
   field: string,
   issues: FieldIssues,
@@ -69,7 +102,8 @@ function optionalText(
   return trimmed === "" ? undefined : trimmed;
 }
 
-function requiredText(
+/** A required free-text field: present, a string, and non-empty when trimmed. */
+export function requiredText(
   raw: unknown,
   field: string,
   issues: FieldIssues,
@@ -112,23 +146,7 @@ export function validateCreateReport(raw: unknown): ValidationResult {
   const dateFromText = requiredText(body.dateFrom, "dateFrom", issues);
   const dateToText = requiredText(body.dateTo, "dateTo", issues);
 
-  let from: number | undefined;
-  let to: number | undefined;
-  if (dateFromText !== undefined) {
-    from = parseCalendarDate(dateFromText);
-    if (from === undefined) issues.dateFrom = { issue: "INVALID_DATE" };
-  }
-  if (dateToText !== undefined) {
-    to = parseCalendarDate(dateToText);
-    if (to === undefined) issues.dateTo = { issue: "INVALID_DATE" };
-  }
-  if (from !== undefined && to !== undefined) {
-    if (to < from) {
-      issues.dateTo = { issue: "DATE_ORDER" };
-    } else if ((to - from) / MS_PER_DAY > MAX_SPAN_DAYS) {
-      issues.dateTo = { issue: "SPAN_TOO_LONG", limit: MAX_SPAN_DAYS };
-    }
-  }
+  applyDateWindowRules(dateFromText, dateToText, issues);
 
   let language: Language | undefined;
   if (body.language === undefined) {

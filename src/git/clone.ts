@@ -44,7 +44,12 @@ export function authorizationHeader(pat: string): string {
   return `Authorization: Basic ${Buffer.from(`x-access-token:${pat}`, "utf8").toString("base64")}`;
 }
 
-function credentialSecrets(pat: string | undefined): (string | undefined)[] {
+/**
+ * Everything derived from the token that is itself a secret. Exported for
+ * TASK-017's `ls-remote`, which redacts the same three values — **a second
+ * list of "what counts as a secret" is how one of them stops being redacted.**
+ */
+export function credentialSecrets(pat: string | undefined): (string | undefined)[] {
   if (pat === undefined) return [];
   const header = authorizationHeader(pat);
   // The base64 blob on its own decodes straight back to the token, so it is a

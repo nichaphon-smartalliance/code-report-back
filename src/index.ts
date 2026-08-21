@@ -1,10 +1,11 @@
 /**
  * HTTP app + server bootstrap (TASK-001 §1, §6).
  *
- * `GET /api/health`, the three auth routes and the two report routes. The
- * session gate in front of `/api/reports*` was mounted by TASK-002, before
- * those routes existed, so they are protected by construction rather than by
- * someone remembering.
+ * `GET /api/health`, the three auth routes, the two report routes and the two
+ * repository-inspection routes (TASK-017). The session gate in front of
+ * `/api/reports*` was mounted by TASK-002, before those routes existed, so they
+ * are protected by construction rather than by someone remembering; the
+ * `/api/repos*` gate is mounted the same way, for the same reason.
  */
 
 import { Hono } from "hono";
@@ -14,6 +15,7 @@ import { describeConfig, loadConfigOrExit } from "./config.ts";
 import { errorEnvelope, requestLanguage } from "./errors/index.ts";
 import { sweepStaleTempDirs } from "./git/cleanup.ts";
 import { createReportRoutes } from "./reports/routes.ts";
+import { createRepoRoutes } from "./repos/routes.ts";
 
 export const app = new Hono<SessionEnv>();
 
@@ -24,8 +26,14 @@ app.get("/api/health", (c) => c.json({ status: "ok" }));
 app.use("/api/reports", requireSession);
 app.use("/api/reports/*", requireSession);
 
+// Session gate — every /api/repos route, mounted before them for the same
+// reason (TASK-017 §4): an unauthenticated call is 401 and no git process runs.
+app.use("/api/repos", requireSession);
+app.use("/api/repos/*", requireSession);
+
 app.route("/api/auth", createAuthRoutes());
 app.route("/api/reports", createReportRoutes());
+app.route("/api/repos", createRepoRoutes());
 
 app.onError((error, c) => {
   console.error(
