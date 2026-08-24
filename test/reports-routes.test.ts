@@ -23,6 +23,11 @@ import type { HostLookup } from "../src/git/urlSafety.ts";
 import { createReportRoutes } from "../src/reports/routes.ts";
 import { createReportWorker, type ReportWorker } from "../src/reports/worker.ts";
 import { fakeAiClient } from "./fixtures/aiClient.ts";
+import {
+  TEST_AI_STAGES,
+  TEST_CURIOSITY_MAX_ITERATIONS,
+  TEST_WRITING_MAX_PASSES,
+} from "./fixtures/aiConfig.ts";
 import { memoryJobRepository, type MemoryJobRepository } from "./fixtures/jobRepository.ts";
 import { commitFiles, initRepo, makeTempDir, removeDir } from "./fixtures/gitRepo.ts";
 
@@ -307,6 +312,9 @@ describe("progress on the wire, from a real run through the worker", () => {
       createReportWorker({
         jobs,
         createAiClient: () => gatedAi,
+        aiStages: TEST_AI_STAGES,
+        aiCuriosityMaxIterations: TEST_CURIOSITY_MAX_ITERATIONS,
+        aiWritingMaxPasses: TEST_WRITING_MAX_PASSES,
         allowPrivateHosts: false,
         timeZone: "Asia/Bangkok",
         maxConcurrent: 2,

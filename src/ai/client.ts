@@ -1,13 +1,14 @@
 /**
  * AI API CENTER client (TASK-004 §1, SPEC-001 "Flow 4–6").
  *
- * Two deliberate absences in every request body:
- *   - **no `provider`** — the service's own fallback chain
- *     `deepseek → xai → gemini → openai` is resilience we get for free;
- *   - **no `model`** — SPEC-001 never names one, and a model id is
- *     provider-specific, so pinning one here would defeat the fallback above.
- *     See TASK-004 `## Questions` (Q-BE-6) for the tier→model mapping that is
- *     Sober's call; until it is made, the service picks.
+ * The request body now **always** carries an explicit `model` and `max_tokens`
+ * (SPEC-007 §1 / TASK-027 §0, Q-BE-25): the pipeline threads a per-stage,
+ * env-configurable model + budget into every call. `provider` stays **absent**
+ * — the service's own fallback chain `deepseek → xai → gemini → openai` is
+ * resilience we get for free, and a `model` outside a provider still lets the
+ * service route it (contract: `{ provider?, model?, temperature?, max_tokens?,
+ * messages }`, `AI-API-CENTER.md`). Before SPEC-007 neither `model` nor an
+ * unconditional `max_tokens` was sent (SPEC-001 named no model per stage).
  *
  * Authentication: the stakeholder's stated fact today is "no auth now", so the
  * `Authorization` header is sent **only** when `AI_API_CENTER_TOKEN` is set —
@@ -47,9 +48,12 @@ export type ChatResult = {
 export type ChatRequest = {
   /** Which pipeline stage this call belongs to — used for logging only. */
   stage: AiStage;
+  /** Model id for this call (per-stage, env-configurable — SPEC-007 §1). */
+  model: string;
+  /** Completion cap for this call (per-stage, env-configurable — SPEC-007 §1). */
+  max_tokens: number;
   messages: ChatMessage[];
   temperature?: number;
-  max_tokens?: number;
 };
 
 export interface AiClient {
@@ -57,13 +61,17 @@ export interface AiClient {
 }
 
 /**
- * The wire body. `stage` is ours and never leaves the process; `provider` and
- * `model` are absent by design (see the module comment).
+ * The wire body. `stage` is ours and never leaves the process; `provider` is
+ * absent by design (see the module comment). `model` and `max_tokens` are
+ * always sent (SPEC-007 §1).
  */
 export function chatBody(request: ChatRequest): Record<string, unknown> {
-  const body: Record<string, unknown> = { messages: request.messages };
+  const body: Record<string, unknown> = {
+    model: request.model,
+    max_tokens: request.max_tokens,
+    messages: request.messages,
+  };
   if (request.temperature !== undefined) body.temperature = request.temperature;
-  if (request.max_tokens !== undefined) body.max_tokens = request.max_tokens;
   return body;
 }
 

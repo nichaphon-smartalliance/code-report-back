@@ -16,6 +16,8 @@ import { AiLayerError } from "../src/ai/errors.ts";
 
 const REQUEST: ChatRequest = {
   stage: "AI_PROJECT",
+  model: "gpt-4.1-mini",
+  max_tokens: 20000,
   messages: [{ role: "user", content: "hello" }],
 };
 
@@ -71,17 +73,37 @@ const hanging: Step = (signal) =>
   });
 
 describe("request shape", () => {
-  test("the body carries messages and NEVER a provider or model key", () => {
+  test("the body always carries model + max_tokens + messages, NEVER a provider", () => {
     const body = chatBody({
       stage: "AI_COMMITS",
+      model: "gpt-4.1",
+      max_tokens: 12345,
       messages: [{ role: "user", content: "x" }],
       temperature: 0.2,
     });
-    expect(Object.keys(body).sort()).toEqual(["messages", "temperature"]);
+    expect(Object.keys(body).sort()).toEqual([
+      "max_tokens",
+      "messages",
+      "model",
+      "temperature",
+    ]);
+    expect(body.model).toBe("gpt-4.1");
+    expect(body.max_tokens).toBe(12345);
+    // The fallback chain is left to the service — no provider is ever pinned.
     expect("provider" in body).toBe(false);
-    expect("model" in body).toBe(false);
     // `stage` is ours for logging — it must not reach the wire either.
     expect("stage" in body).toBe(false);
+  });
+
+  test("max_tokens is always present even without temperature", () => {
+    const body = chatBody({
+      stage: "AI_WRITING",
+      model: "grok-4-latest",
+      max_tokens: 50000,
+      messages: [{ role: "user", content: "x" }],
+    });
+    expect(Object.keys(body).sort()).toEqual(["max_tokens", "messages", "model"]);
+    expect("temperature" in body).toBe(false);
   });
 
   test("no Authorization header when AI_API_CENTER_TOKEN is unset", () => {
@@ -118,7 +140,8 @@ describe("request shape", () => {
     expect(headers["Authorization"]).toBeUndefined();
     const sent = JSON.parse(String(calls[0]?.init?.body));
     expect(sent.provider).toBeUndefined();
-    expect(sent.model).toBeUndefined();
+    expect(sent.model).toBe(REQUEST.model);
+    expect(sent.max_tokens).toBe(REQUEST.max_tokens);
     expect(sent.messages).toEqual(REQUEST.messages);
   });
 });
@@ -239,6 +262,8 @@ describe("logging (TASK-004 §5)", () => {
     });
     await client.chat({
       stage: "AI_COMMITS",
+      model: "gpt-4.1-mini",
+      max_tokens: 20000,
       messages: [
         { role: "system", content: "you are an engineer" },
         { role: "user", content: SECRET_PROMPT },

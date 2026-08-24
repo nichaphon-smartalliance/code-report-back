@@ -16,17 +16,35 @@
 import type { AiClient } from "../ai/client.ts";
 import { AiLayerError } from "../ai/errors.ts";
 import { noCommitsReport } from "../ai/noCommitsReport.ts";
-import { runPipeline } from "../ai/pipeline.ts";
+import { passThroughInvestigator, runPipeline } from "../ai/pipeline.ts";
+import type { AiStage } from "../ai/stages.ts";
+import type { AiStagesConfig } from "../config.ts";
 import { errorMessage, type ErrorCode, type MessageParams } from "../errors/messages.ts";
 import { GitLayerError } from "../git/errors.ts";
 import { withClone } from "../git/clone.ts";
 import { readCommits } from "../git/commits.ts";
+import { createRepoInspector } from "../git/inspect.ts";
 import { readMarkdownDigest } from "../git/markdown.ts";
 import { redact } from "../git/redact.ts";
 import type { GitRunner } from "../git/run.ts";
 import { readFileTree } from "../git/tree.ts";
 import { RepoUrlError, type HostLookup } from "../git/urlSafety.ts";
-import type { JobFailure, JobRepository, ReportJob } from "./jobs.ts";
+import type { JobFailure, JobRepository, JobStage, ReportJob } from "./jobs.ts";
+
+/**
+ * The internal→wire stage mapping (SPEC-007 D-wire, TASK-027 §5). The pipeline
+ * announces the five **internal** stage names; the wire stays at the six
+ * `JOB_STAGES`, so the two new stages are folded onto existing wire stages
+ * before `jobs.setStage`. Consecutive duplicates are collapsed by `reportStage`
+ * below, so a run still reports exactly the six wire stages in order.
+ */
+const WIRE_STAGE_BY_INTERNAL: Record<AiStage, JobStage> = {
+  AI_PROJECT: "AI_PROJECT",
+  AI_COMMITS: "AI_COMMITS",
+  AI_CURIOUSNESS: "AI_COMMITS",
+  AI_UNDERSTANDING: "AI_WRITING",
+  AI_WRITING: "AI_WRITING",
+};
 
 export type WorkerLogSink = (line: string) => void;
 
@@ -37,6 +55,12 @@ export type WorkerOptions = {
    * (TASK-005 §7) without the AI layer having to know what a job is.
    */
   createAiClient: (context: { jobId: string; userId: string }) => AiClient;
+  /** Per-stage model + max_tokens the pipeline sends on every AI call (SPEC-007 §1). */
+  aiStages: AiStagesConfig;
+  /** AI_CURIOUSNESS investigation loop cap (SPEC-007 §Flow 3). */
+  aiCuriosityMaxIterations: number;
+  /** AI_WRITING by-topic pass cap (SPEC-007 §Flow 5). */
+  aiWritingMaxPasses: number;
   allowPrivateHosts: boolean;
   timeZone: string;
   maxConcurrent: number;
@@ -125,7 +149,17 @@ export function createReportWorker(options: WorkerOptions): ReportWorker {
     const started = Date.now();
     const base = { jobId: job.id, userId: job.userId };
 
-    await jobs.setStage(job.id, "CLONING");
+    // Report a wire stage, collapsing consecutive duplicates so the mapped
+    // five internal stages still surface as the six unique wire stages in
+    // order (SPEC-007 D-wire, TASK-027 §5).
+    let lastWireStage: JobStage | undefined;
+    const reportStage = async (stage: JobStage): Promise<void> => {
+      if (stage === lastWireStage) return;
+      lastWireStage = stage;
+      await jobs.setStage(job.id, stage);
+    };
+
+    await reportStage("CLONING");
     emit({ ...base, msg: "started", stage: "CLONING" });
 
     await withClone(
@@ -144,7 +178,7 @@ export function createReportWorker(options: WorkerOptions): ReportWorker {
       async (clone) => {
         const runner = options.gitRunner;
 
-        await jobs.setStage(job.id, "READING_CODEBASE");
+        await reportStage("READING_CODEBASE");
         const tree = await readFileTree(clone.dir, {
           ...(runner === undefined ? {} : { runner }),
         });
@@ -162,7 +196,7 @@ export function createReportWorker(options: WorkerOptions): ReportWorker {
           ...(runner === undefined ? {} : { runner }),
         });
 
-        await jobs.setStage(job.id, "READING_COMMITS");
+        await reportStage("READING_COMMITS");
         const commits = await readCommits(clone.dir, {
           ...(job.branch === undefined ? {} : { branch: job.branch }),
           dateFrom: job.dateFrom,
@@ -200,6 +234,16 @@ export function createReportWorker(options: WorkerOptions): ReportWorker {
           tree,
           markdown,
           commits,
+          // Real repo access for AI_CURIOUSNESS over the still-live clone. The
+          // pass-through investigator makes no use of it yet (TASK-028 supplies
+          // the real loop and swaps itself in here).
+          inspector: createRepoInspector(clone.dir, {
+            ...(runner === undefined ? {} : { runner }),
+          }),
+          investigator: passThroughInvestigator,
+          aiStages: options.aiStages,
+          curiosityMaxIterations: options.aiCuriosityMaxIterations,
+          writingMaxPasses: options.aiWritingMaxPasses,
           params: {
             repoUrl: job.repoUrl,
             branch: job.branch,
@@ -215,12 +259,12 @@ export function createReportWorker(options: WorkerOptions): ReportWorker {
           ...(job.extraContext === undefined
             ? {}
             : { extraContext: job.extraContext }),
-          // Only the stage name is taken. The pipeline's own position object
-          // counts AI calls (a 41-commit run counts to five); the wire
-          // `progress` counts stages and its total is six by definition, so it
-          // is derived from the stage in `jobResponse` and never forwarded from
-          // here (TASK-005 §7).
-          onStage: (stage) => jobs.setStage(job.id, stage),
+          // The pipeline announces the five **internal** stage names; the wire
+          // stays at the six `JOB_STAGES`, so each is mapped (D-wire) and
+          // consecutive duplicates collapsed before it is stored. The wire
+          // `progress` total is six by definition and is derived from the
+          // stage in `jobResponse`, never forwarded from here (TASK-005 §7).
+          onStage: (stage) => reportStage(WIRE_STAGE_BY_INTERNAL[stage]),
         });
 
         await jobs.finishDone(job.id, {

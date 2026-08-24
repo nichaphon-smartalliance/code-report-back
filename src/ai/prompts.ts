@@ -295,3 +295,185 @@ export function stage3Messages(input: {
     },
   ];
 }
+
+/* ------------------------------------------------------------------ *
+ * AI_UNDERSTANDING — the model writes its own reasoned understanding
+ * (SPEC-007 §Flow step 4)
+ * ------------------------------------------------------------------ */
+
+const UNDERSTANDING_SYSTEM =
+  "You are a senior software engineer forming your OWN reasoned understanding " +
+  "of a codebase before any report is written. You are given a project " +
+  "profile, per-batch summaries of the commits, and the findings of an earlier " +
+  "investigation of the real repository. Write a block of thought — in your " +
+  "own words — that explains what the important things ARE, how they connect, " +
+  "and what depends on what. Do NOT translate or pass the inputs through, do " +
+  "NOT write report prose, and do NOT address a reader: this is your working " +
+  "understanding, not the deliverable. State plainly where the material does " +
+  "not show something rather than guessing. Answer in English; identifiers, " +
+  "file paths and commit shas are never translated.";
+
+export function understandingMessages(input: {
+  profile: string;
+  batchSummaries: string[];
+  findings: string;
+  extraContext?: string | undefined;
+}): ChatMessage[] {
+  const findings = input.findings.trim();
+  return [
+    { role: "system", content: UNDERSTANDING_SYSTEM },
+    {
+      role: "user",
+      content: join([
+        `PROJECT PROFILE:\n${input.profile}`,
+        input.batchSummaries
+          .map((summary, index) => `WORK SUMMARY ${index + 1}:\n${summary}`)
+          .join("\n\n"),
+        findings === ""
+          ? "INVESTIGATION FINDINGS: none gathered."
+          : join([
+              "INVESTIGATION FINDINGS (gathered from the real repository):",
+              repoBlock(findings),
+            ]),
+        contextBlock(input.extraContext),
+      ]),
+    },
+  ];
+}
+
+/* ------------------------------------------------------------------ *
+ * AI_WRITING — a topic plan, then one section per topic (SPEC-007 §Flow 5)
+ * ------------------------------------------------------------------ */
+
+/** The fence a plan reply is expected to use, so BE can parse it back. */
+export const TOPIC_PLAN_FENCE = "json";
+
+function writingPlanSystem(maxPasses: number): string {
+  return join([
+    "You are planning the structure of a dev-work report before it is written. " +
+      "Given a reasoned understanding of the work and per-batch commit " +
+      "summaries, split the material into an ORDERED list of distinct topics — " +
+      `at most ${maxPasses} of them — so that each topic can be written as one ` +
+      "self-contained section without overlapping the others.",
+    "Return ONLY a fenced JSON array of short topic titles (strings), in the " +
+      `order they should appear, and nothing else:\n\`\`\`${TOPIC_PLAN_FENCE}\n` +
+      '["First topic", "Second topic"]\n```',
+    "Fewer topics is fine when the material is small; never exceed the limit.",
+  ]);
+}
+
+export function writingPlanMessages(input: {
+  understanding: string;
+  batchSummaries: string[];
+  maxPasses: number;
+  extraContext?: string | undefined;
+}): ChatMessage[] {
+  return [
+    { role: "system", content: writingPlanSystem(input.maxPasses) },
+    {
+      role: "user",
+      content: join([
+        `UNDERSTANDING:\n${input.understanding}`,
+        input.batchSummaries
+          .map((summary, index) => `WORK SUMMARY ${index + 1}:\n${summary}`)
+          .join("\n\n"),
+        contextBlock(input.extraContext),
+      ]),
+    },
+  ];
+}
+
+/**
+ * Parse a plan reply into an ordered, de-duplicated, capped topic list. A
+ * reply the model did not fence as asked, or one that yields no usable topics,
+ * degrades to a **single** topic (the whole report in one pass — today's
+ * behaviour), never a throw: one bad plan must not fail the run.
+ */
+export function parseTopicPlan(content: string, maxPasses: number): string[] {
+  const fenced = content.match(/```(?:[a-zA-Z]+)?\s*([\s\S]*?)```/);
+  const source = (fenced?.[1] ?? content).trim();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source);
+  } catch {
+    return [WHOLE_REPORT_TOPIC];
+  }
+  if (!Array.isArray(parsed)) return [WHOLE_REPORT_TOPIC];
+  const topics: string[] = [];
+  for (const item of parsed) {
+    if (typeof item !== "string") continue;
+    const title = item.trim();
+    if (title === "" || topics.includes(title)) continue;
+    topics.push(title);
+    if (topics.length >= maxPasses) break;
+  }
+  return topics.length === 0 ? [WHOLE_REPORT_TOPIC] : topics;
+}
+
+/** The topic used when the plan is unusable or yields one section. */
+export const WHOLE_REPORT_TOPIC = "The complete report";
+
+function writingSectionSystem(
+  language: Language,
+  topics: string[],
+  topicIndex: number,
+): string {
+  const single = topics.length === 1;
+  const scope = single
+    ? "You are writing the COMPLETE report body in one section: cover all of " +
+      "the material below."
+    : join([
+        "You are writing ONE section of a larger report. The full ordered " +
+          `topic list is:\n${topics
+            .map((topic, index) => `${index + 1}. ${topic}`)
+            .join("\n")}`,
+        `Write ONLY section ${topicIndex + 1} — "${topics[topicIndex]}". Do ` +
+          "not write the other topics' sections and do not repeat their " +
+          "material; another pass writes each of those.",
+        "Begin the section with a Markdown heading for this topic.",
+      ]);
+  return join([
+    "You are writing part of the final dev-work report. Output GitHub-Flavored " +
+      "Markdown and nothing else — no preamble, no code fence around the whole " +
+      "section.",
+    scope,
+    LANGUAGE_RULE[language],
+    "Identifiers, file paths and commit shas are NEVER translated. Do not " +
+      "invent work that is not in the material below; the summaries were " +
+      "written from partial diffs, so describe what is supported and no more.",
+    "Every date is reproduced EXACTLY as it is given to you. Never reformat a " +
+      "date, never reorder its parts, never translate a month name and never " +
+      "convert it to another calendar or era.",
+  ]);
+}
+
+export function writingSectionMessages(input: {
+  understanding: string;
+  batchSummaries: string[];
+  params: ReportParams;
+  topics: string[];
+  topicIndex: number;
+  extraContext?: string | undefined;
+}): ChatMessage[] {
+  return [
+    {
+      role: "system",
+      content: writingSectionSystem(
+        input.params.language,
+        input.topics,
+        input.topicIndex,
+      ),
+    },
+    {
+      role: "user",
+      content: join([
+        formatReportParams(input.params),
+        `UNDERSTANDING:\n${input.understanding}`,
+        input.batchSummaries
+          .map((summary, index) => `WORK SUMMARY ${index + 1}:\n${summary}`)
+          .join("\n\n"),
+        contextBlock(input.extraContext),
+      ]),
+    },
+  ];
+}

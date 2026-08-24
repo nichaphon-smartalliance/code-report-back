@@ -21,6 +21,11 @@ import type { HostLookup } from "../src/git/urlSafety.ts";
 import { JOB_STAGES, stageProgress, type ReportJob } from "../src/reports/jobs.ts";
 import { createReportWorker } from "../src/reports/worker.ts";
 import { fakeAiClient, type FakeAiClient } from "./fixtures/aiClient.ts";
+import {
+  TEST_AI_STAGES,
+  TEST_CURIOSITY_MAX_ITERATIONS,
+  TEST_WRITING_MAX_PASSES,
+} from "./fixtures/aiConfig.ts";
 import { memoryJobRepository, type MemoryJobRepository } from "./fixtures/jobRepository.ts";
 import { commitFiles, initRepo, makeTempDir, removeDir } from "./fixtures/gitRepo.ts";
 
@@ -111,6 +116,9 @@ function harness(
   const worker = createReportWorker({
     jobs,
     createAiClient: () => ai,
+    aiStages: TEST_AI_STAGES,
+    aiCuriosityMaxIterations: TEST_CURIOSITY_MAX_ITERATIONS,
+    aiWritingMaxPasses: TEST_WRITING_MAX_PASSES,
     allowPrivateHosts: false,
     timeZone: "Asia/Bangkok",
     maxConcurrent: options.maxConcurrent ?? 2,
@@ -154,7 +162,12 @@ describe("the happy path", () => {
 
     expect(job.status).toBe("DONE");
     expect(job.commitCount).toBe(2);
-    expect(job.reportMd).toBe("<<AI_WRITING>>");
+    // D2 assembly (SPEC-007): the report is a fixed `formatReportParams` header
+    // followed by the concatenated AI_WRITING topic sections — not the single
+    // last reply. The fake replies `<<AI_WRITING>>` to the plan (unparseable →
+    // one topic) and to the one section pass.
+    expect(job.reportMd).toContain("Repository:");
+    expect(job.reportMd).toContain("<<AI_WRITING>>");
     expect(job.stage).toBeUndefined();
     expect(job.errorCode).toBeUndefined();
   }, 60_000);
@@ -291,6 +304,9 @@ describe("failures", () => {
           throw new AiLayerError("AI_UNAVAILABLE", { detail: "no response" });
         },
       }),
+      aiStages: TEST_AI_STAGES,
+      aiCuriosityMaxIterations: TEST_CURIOSITY_MAX_ITERATIONS,
+      aiWritingMaxPasses: TEST_WRITING_MAX_PASSES,
       allowPrivateHosts: false,
       timeZone: "Asia/Bangkok",
       maxConcurrent: 2,
@@ -326,6 +342,9 @@ describe("concurrency", () => {
     const worker = createReportWorker({
       jobs,
       createAiClient: () => fakeAiClient(),
+      aiStages: TEST_AI_STAGES,
+      aiCuriosityMaxIterations: TEST_CURIOSITY_MAX_ITERATIONS,
+      aiWritingMaxPasses: TEST_WRITING_MAX_PASSES,
       allowPrivateHosts: false,
       timeZone: "Asia/Bangkok",
       maxConcurrent: 2,
