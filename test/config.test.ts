@@ -55,6 +55,82 @@ describe("loadConfig", () => {
   });
 });
 
+describe("per-stage AI settings (SPEC-007 / TASK-025)", () => {
+  test("applies the mandated per-stage model + max_tokens defaults", () => {
+    const config = loadConfig(MINIMAL);
+    expect(config.aiStages.AI_PROJECT).toEqual({
+      model: "gpt-4.1-mini",
+      maxTokens: 20000,
+    });
+    expect(config.aiStages.AI_COMMITS).toEqual({
+      model: "gpt-4.1-mini",
+      maxTokens: 20000,
+    });
+    expect(config.aiStages.AI_CURIOUSNESS).toEqual({
+      model: "grok-4-latest",
+      maxTokens: 50000,
+    });
+    expect(config.aiStages.AI_UNDERSTANDING).toEqual({
+      model: "gpt-4.1",
+      maxTokens: 40000,
+    });
+    expect(config.aiStages.AI_WRITING).toEqual({
+      model: "gpt-4.1",
+      maxTokens: 50000,
+    });
+    expect(config.aiCuriosityMaxIterations).toBe(5);
+    expect(config.aiWritingMaxPasses).toBe(3);
+  });
+
+  test("reads per-stage overrides from the environment", () => {
+    const config = loadConfig({
+      ...MINIMAL,
+      AI_PROJECT_MODEL: "deepseek-v4-pro",
+      AI_PROJECT_MAX_TOKENS: "12000",
+      AI_CURIOUSNESS_MAX_ITERATIONS: "8",
+      AI_WRITING_MAX_PASSES: "2",
+    });
+    expect(config.aiStages.AI_PROJECT).toEqual({
+      model: "deepseek-v4-pro",
+      maxTokens: 12000,
+    });
+    expect(config.aiCuriosityMaxIterations).toBe(8);
+    expect(config.aiWritingMaxPasses).toBe(2);
+  });
+
+  test("rejects an unknown model id for a stage", () => {
+    expect(() =>
+      loadConfig({ ...MINIMAL, AI_WRITING_MODEL: "gpt-9000" }),
+    ).toThrow(ConfigError);
+    expect(() =>
+      loadConfig({ ...MINIMAL, AI_WRITING_MODEL: "gpt-9000" }),
+    ).toThrow(/AI_WRITING_MODEL/);
+  });
+
+  test("rejects a max_tokens above the assigned model's per-call cap", () => {
+    // gpt-4.1-mini caps at 30000; 40000 must be fatal.
+    expect(() =>
+      loadConfig({ ...MINIMAL, AI_COMMITS_MAX_TOKENS: "40000" }),
+    ).toThrow(/AI_COMMITS_MAX_TOKENS/);
+    // The same budget is fine once the model's cap allows it.
+    const ok = loadConfig({
+      ...MINIMAL,
+      AI_COMMITS_MODEL: "gpt-4.1",
+      AI_COMMITS_MAX_TOKENS: "40000",
+    });
+    expect(ok.aiStages.AI_COMMITS).toEqual({
+      model: "gpt-4.1",
+      maxTokens: 40000,
+    });
+  });
+
+  test("rejects a non-positive per-stage max_tokens", () => {
+    expect(() =>
+      loadConfig({ ...MINIMAL, AI_PROJECT_MAX_TOKENS: "0" }),
+    ).toThrow(/AI_PROJECT_MAX_TOKENS/);
+  });
+});
+
 describe("describeConfig", () => {
   test("never exposes secret values", () => {
     const described = JSON.stringify(
