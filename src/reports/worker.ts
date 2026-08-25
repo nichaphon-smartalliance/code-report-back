@@ -16,7 +16,8 @@
 import type { AiClient } from "../ai/client.ts";
 import { AiLayerError } from "../ai/errors.ts";
 import { noCommitsReport } from "../ai/noCommitsReport.ts";
-import { passThroughInvestigator, runPipeline } from "../ai/pipeline.ts";
+import { curiosityInvestigator } from "../ai/curiosity.ts";
+import { runPipeline } from "../ai/pipeline.ts";
 import type { AiStage } from "../ai/stages.ts";
 import type { AiStagesConfig } from "../config.ts";
 import { errorMessage, type ErrorCode, type MessageParams } from "../errors/messages.ts";
@@ -234,13 +235,13 @@ export function createReportWorker(options: WorkerOptions): ReportWorker {
           tree,
           markdown,
           commits,
-          // Real repo access for AI_CURIOUSNESS over the still-live clone. The
-          // pass-through investigator makes no use of it yet (TASK-028 supplies
-          // the real loop and swaps itself in here).
+          // Real repo access for AI_CURIOUSNESS over the still-live clone: the
+          // real investigator (TASK-028) drives it through the text-action
+          // protocol, path-confined and size-capped by the inspector itself.
           inspector: createRepoInspector(clone.dir, {
             ...(runner === undefined ? {} : { runner }),
           }),
-          investigator: passThroughInvestigator,
+          investigator: curiosityInvestigator,
           aiStages: options.aiStages,
           curiosityMaxIterations: options.aiCuriosityMaxIterations,
           writingMaxPasses: options.aiWritingMaxPasses,

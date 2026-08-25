@@ -194,6 +194,19 @@ describe("the happy path", () => {
     expect(await exists(jobTempDir(job.id))).toBe(false);
   }, 60_000);
 
+  test("the now-live AI_CURIOUSNESS stage makes a real call with its configured model + budget (TASK-028)", async () => {
+    // The default fake replies `reply for AI_CURIOUSNESS`, which is unparseable
+    // as an action block, so the real investigator makes exactly one call and
+    // safely exits — but that one call is now real (it was inert under the
+    // pass-through), and it must carry the AI_CURIOUSNESS env model/budget.
+    const h = harness();
+    await h.run({});
+    const curiosity = h.ai.requests.filter((request) => request.stage === "AI_CURIOUSNESS");
+    expect(curiosity.length).toBeGreaterThanOrEqual(1);
+    expect(curiosity[0]!.model).toBe(TEST_AI_STAGES.AI_CURIOUSNESS.model);
+    expect(curiosity[0]!.max_tokens).toBe(TEST_AI_STAGES.AI_CURIOUSNESS.maxTokens);
+  }, 60_000);
+
   test("the pipeline is given the stored YYYY-MM-DD dates, and prints DD/MMM/YY", async () => {
     const h = harness();
     await h.run({});
