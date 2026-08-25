@@ -37,7 +37,8 @@ import type { AiStage } from "./stages.ts";
  *
  * Deliberately **not** `{current, total}`: SPEC-001 "GET /api/reports/:jobId"
  * uses those two names for the wire field `progress`, whose `total` is the
- * number of `stage` values (six) — a different quantity entirely. This module
+ * number of `stage` values (eight since SPEC-008) — a different quantity
+ * entirely. This module
  * does not own that field and must not hand out something that can be
  * forwarded onto the wire by mistake. `batch` is present only during
  * `AI_COMMITS`.

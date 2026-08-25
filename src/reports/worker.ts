@@ -33,17 +33,19 @@ import { RepoUrlError, type HostLookup } from "../git/urlSafety.ts";
 import type { JobFailure, JobRepository, JobStage, ReportJob } from "./jobs.ts";
 
 /**
- * The internal→wire stage mapping (SPEC-007 D-wire, TASK-027 §5). The pipeline
- * announces the five **internal** stage names; the wire stays at the six
- * `JOB_STAGES`, so the two new stages are folded onto existing wire stages
- * before `jobs.setStage`. Consecutive duplicates are collapsed by `reportStage`
- * below, so a run still reports exactly the six wire stages in order.
+ * The internal→wire stage mapping (SPEC-007 D-wire, un-folded by SPEC-008). The
+ * pipeline announces the five **internal** stage names; the wire now carries all
+ * eight `JOB_STAGES`, so this is an **identity** map — each internal stage maps
+ * to the wire stage of the same name (the two reasoning stages are no longer
+ * folded onto `AI_COMMITS`/`AI_WRITING`). Consecutive duplicates are still
+ * collapsed by `reportStage` below (`AI_COMMITS` is announced once per batch),
+ * so a run reports exactly the eight wire stages in order.
  */
 const WIRE_STAGE_BY_INTERNAL: Record<AiStage, JobStage> = {
   AI_PROJECT: "AI_PROJECT",
   AI_COMMITS: "AI_COMMITS",
-  AI_CURIOUSNESS: "AI_COMMITS",
-  AI_UNDERSTANDING: "AI_WRITING",
+  AI_CURIOUSNESS: "AI_CURIOUSNESS",
+  AI_UNDERSTANDING: "AI_UNDERSTANDING",
   AI_WRITING: "AI_WRITING",
 };
 
@@ -151,8 +153,9 @@ export function createReportWorker(options: WorkerOptions): ReportWorker {
     const base = { jobId: job.id, userId: job.userId };
 
     // Report a wire stage, collapsing consecutive duplicates so the mapped
-    // five internal stages still surface as the six unique wire stages in
-    // order (SPEC-007 D-wire, TASK-027 §5).
+    // five internal stages surface as the eight unique wire stages in order
+    // (SPEC-007 D-wire un-folded by SPEC-008; the `AI_COMMITS` per-batch repeat
+    // is the only duplicate left to collapse).
     let lastWireStage: JobStage | undefined;
     const reportStage = async (stage: JobStage): Promise<void> => {
       if (stage === lastWireStage) return;
@@ -261,10 +264,11 @@ export function createReportWorker(options: WorkerOptions): ReportWorker {
             ? {}
             : { extraContext: job.extraContext }),
           // The pipeline announces the five **internal** stage names; the wire
-          // stays at the six `JOB_STAGES`, so each is mapped (D-wire) and
-          // consecutive duplicates collapsed before it is stored. The wire
-          // `progress` total is six by definition and is derived from the
-          // stage in `jobResponse`, never forwarded from here (TASK-005 §7).
+          // now carries all eight `JOB_STAGES`, so each is mapped (identity
+          // D-wire, SPEC-008) and consecutive duplicates collapsed before it is
+          // stored. The wire `progress` total is eight by definition and is
+          // derived from the stage in `jobResponse`, never forwarded from here
+          // (TASK-005 §7).
           onStage: (stage) => reportStage(WIRE_STAGE_BY_INTERNAL[stage]),
         });
 

@@ -16,12 +16,16 @@ import { query, type Queryable } from "../db/index.ts";
 import type { ErrorCode, Language } from "../errors/messages.ts";
 
 /**
- * The six stages a reader is shown, in order (SPEC-001 `stage`).
+ * The eight stages a reader is shown, in order (SPEC-001 `stage`; grown from
+ * six to eight by SPEC-008, un-folding the two reasoning stages).
  *
- * **`progress.total` is the length of this list — six.** The worker's "store"
+ * **`progress.total` is the length of this list — eight.** The worker's "store"
  * and "clean up" steps have no stage value and are not counted: the frontend
- * renders exactly these six as a list, so a seventh would print "Step 7 / 7"
- * over six rows (SPEC-001, amended 2026-08-20).
+ * renders exactly these eight as a list, so a ninth would print "Step 9 / 9"
+ * over eight rows (SPEC-001 amended 2026-08-20; SPEC-008 2026-08-25). The two
+ * AI reasoning stages `AI_CURIOUSNESS` and `AI_UNDERSTANDING` — which the
+ * pipeline already announces (SPEC-007) — are now first-class wire stages of
+ * their own instead of being folded onto `AI_COMMITS`/`AI_WRITING` (SPEC-008).
  */
 export const JOB_STAGES = [
   "CLONING",
@@ -29,6 +33,8 @@ export const JOB_STAGES = [
   "READING_COMMITS",
   "AI_PROJECT",
   "AI_COMMITS",
+  "AI_CURIOUSNESS",
+  "AI_UNDERSTANDING",
   "AI_WRITING",
 ] as const;
 

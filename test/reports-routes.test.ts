@@ -295,7 +295,7 @@ describe("GET /api/reports/:jobId", () => {
 });
 
 describe("progress on the wire, from a real run through the worker", () => {
-  test("total is 6 and current is the stage's index, at two different stages", async () => {
+  test("total is 8 and current is the stage's index, at two different stages", async () => {
     let releaseClone: () => void = () => {};
     let releaseAi: () => void = () => {};
     const cloneGate = new Promise<void>((resolve) => (releaseClone = resolve));
@@ -347,11 +347,11 @@ describe("progress on the wire, from a real run through the worker", () => {
     };
 
     const cloning = await until("CLONING");
-    expect(cloning.progress).toEqual({ current: 1, total: 6 });
+    expect(cloning.progress).toEqual({ current: 1, total: 8 });
 
     releaseClone();
     const analysing = await until("AI_PROJECT");
-    expect(analysing.progress).toEqual({ current: 4, total: 6 });
+    expect(analysing.progress).toEqual({ current: 4, total: 8 });
 
     releaseAi();
     const finished = await until(null);

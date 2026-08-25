@@ -172,20 +172,32 @@ describe("the happy path", () => {
     expect(job.errorCode).toBeUndefined();
   }, 60_000);
 
-  test("the six stages are announced in SPEC-001's order", async () => {
+  test("the eight stages are announced in SPEC-001's order", async () => {
     const h = harness();
     await h.run({});
     expect(h.jobs.stages).toEqual([...JOB_STAGES]);
   }, 60_000);
 
-  test("progress derived from a real run's stages is always current/6", async () => {
+  test("progress derived from a real run's stages is always current/8", async () => {
     const h = harness();
     await h.run({});
     // Asserted on the stages the worker actually reported, not on a constant.
     const seen = h.jobs.stages.map((stage) => stageProgress(stage));
-    expect(seen).toHaveLength(6);
-    for (const progress of seen) expect(progress.total).toBe(6);
-    expect(seen.map((p) => p.current)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(seen).toHaveLength(8);
+    for (const progress of seen) expect(progress.total).toBe(8);
+    expect(seen.map((p) => p.current)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+  }, 60_000);
+
+  test("the un-folded reasoning stages surface at their own positions (SPEC-008; REQ-009 AC 1/2)", async () => {
+    // The pipeline announces AI_CURIOUSNESS + AI_UNDERSTANDING unconditionally,
+    // and the wire mapping is now identity — so a real run reports each as its
+    // own wire stage (no longer collapsed into AI_COMMITS/AI_WRITING).
+    const h = harness();
+    await h.run({});
+    expect(h.jobs.stages).toContain("AI_CURIOUSNESS");
+    expect(h.jobs.stages).toContain("AI_UNDERSTANDING");
+    expect(stageProgress("AI_CURIOUSNESS")).toEqual({ current: 6, total: 8 });
+    expect(stageProgress("AI_UNDERSTANDING")).toEqual({ current: 7, total: 8 });
   }, 60_000);
 
   test("the temp dir is gone after a successful run", async () => {
