@@ -32,7 +32,16 @@ export const APPROVED_MODEL_CAPS: Record<string, number> = {
   "grok-4-latest": 50000,
   "gpt-4.1-mini": 30000,
   "deepseek-v4-pro": 30000,
+  "deepseek-v4-flash": 30000,
 };
+
+/**
+ * Ordered model-level fallback chain (SPEC-007 §Fallback / D6, Req-7). Tried,
+ * in order, when a primary call exhausts on a provider/model-side failure. The
+ * default when `AI_FALLBACK_MODELS` is **absent**; an explicit empty/blank value
+ * disables the fallback (see `loadFallbackModels`).
+ */
+const FALLBACK_MODELS_DEFAULT = "deepseek-v4-pro,deepseek-v4-flash";
 
 /**
  * Model → stage defaults (SPEC-007 D3). PENDING stakeholder confirmation via
@@ -73,6 +82,11 @@ export type Config = {
   aiCuriosityMaxIterations: number;
   /** AI_WRITING by-topic pass cap (SPEC-007 §Flow 5). */
   aiWritingMaxPasses: number;
+  /**
+   * Ordered model-level fallback chain (SPEC-007 §Fallback / D6, Req-7). Empty
+   * = fallback disabled. Every id is a validated `APPROVED_MODEL_CAPS` key.
+   */
+  fallbackModels: string[];
 };
 
 export type Env = Record<string, string | undefined>;
@@ -165,6 +179,33 @@ function loadAiStages(env: Env): AiStagesConfig {
   return stages;
 }
 
+/**
+ * Load and validate the model-level fallback chain (SPEC-007 §Fallback, Req-7).
+ * `AI_FALLBACK_MODELS` is comma-separated, order preserved, whitespace trimmed,
+ * blank entries dropped. **Absent** ⇒ the built-in default chain
+ * (`deepseek-v4-pro,deepseek-v4-flash`); an **explicit empty/blank** value ⇒
+ * `[]` (fallback disabled) — legal, not a `ConfigError`. Every remaining id must
+ * be an approved model, else a fatal `ConfigError` at startup (same style as an
+ * unknown stage model).
+ */
+function loadFallbackModels(env: Env): string[] {
+  const raw = env["AI_FALLBACK_MODELS"];
+  const source = raw === undefined ? FALLBACK_MODELS_DEFAULT : raw;
+  const models = source
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== "");
+  for (const model of models) {
+    if (APPROVED_MODEL_CAPS[model] === undefined) {
+      throw new ConfigError(
+        `Environment variable AI_FALLBACK_MODELS contains "${model}", which is ` +
+          `not an approved model id. Approved: ${Object.keys(APPROVED_MODEL_CAPS).join(", ")}.`,
+      );
+    }
+  }
+  return models;
+}
+
 export function loadConfig(env: Env): Config {
   return {
     DATABASE_URL: required(env, "DATABASE_URL"),
@@ -183,6 +224,7 @@ export function loadConfig(env: Env): Config {
     aiStages: loadAiStages(env),
     aiCuriosityMaxIterations: positiveInt(env, "AI_CURIOUSNESS_MAX_ITERATIONS", 5),
     aiWritingMaxPasses: positiveInt(env, "AI_WRITING_MAX_PASSES", 3),
+    fallbackModels: loadFallbackModels(env),
   };
 }
 
@@ -211,6 +253,7 @@ export function describeConfig(config: Config): Record<string, unknown> {
     aiStages: config.aiStages,
     aiCuriosityMaxIterations: config.aiCuriosityMaxIterations,
     aiWritingMaxPasses: config.aiWritingMaxPasses,
+    fallbackModels: config.fallbackModels,
   };
 }
 

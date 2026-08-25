@@ -5,6 +5,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+  buildModelChain,
   chatBody,
   chatHeaders,
   chatUrl,
@@ -13,6 +14,7 @@ import {
   type ChatRequest,
 } from "../src/ai/client.ts";
 import { AiLayerError } from "../src/ai/errors.ts";
+import { APPROVED_MODEL_CAPS } from "../src/config.ts";
 
 const REQUEST: ChatRequest = {
   stage: "AI_PROJECT",
@@ -245,6 +247,170 @@ describe("responses and retry (1 retry, then AI_UNAVAILABLE)", () => {
     });
     expect((await client.chat(REQUEST)).content).toBe("up again");
     expect(calls).toHaveLength(2);
+  });
+});
+
+describe("model-level fallback (SPEC-007 §Fallback / Req-7)", () => {
+  /**
+   * A fake fetch that answers per request-body `model`, recording the model +
+   * `max_tokens` of every call. No network is touched.
+   */
+  function byModel(handlers: Record<string, Step>): {
+    fetchImpl: typeof fetch;
+    calls: { model: string; maxTokens: number }[];
+  } {
+    const calls: { model: string; maxTokens: number }[] = [];
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as {
+        model: string;
+        max_tokens: number;
+      };
+      calls.push({ model: body.model, maxTokens: body.max_tokens });
+      const handler = handlers[body.model];
+      if (handler === undefined) {
+        throw new Error(`no scripted handler for model ${body.model}`);
+      }
+      return handler(init?.signal);
+    }) as unknown as typeof fetch;
+    return { fetchImpl, calls };
+  }
+
+  const fail500: Step = async () =>
+    jsonResponse({ success: false, error: "boom" }, 500);
+
+  test("buildModelChain de-dups the primary and repeated fallbacks, order kept", () => {
+    expect(buildModelChain("gpt-4.1", ["deepseek-v4-pro", "deepseek-v4-flash"])).toEqual([
+      "gpt-4.1",
+      "deepseek-v4-pro",
+      "deepseek-v4-flash",
+    ]);
+    // primary equal to a fallback id is dropped from the fallback slot
+    expect(
+      buildModelChain("deepseek-v4-pro", ["deepseek-v4-pro", "deepseek-v4-flash"]),
+    ).toEqual(["deepseek-v4-pro", "deepseek-v4-flash"]);
+    expect(buildModelChain("gpt-4.1", [])).toEqual(["gpt-4.1"]);
+  });
+
+  test("(a) a fallback-eligible primary exhaustion → success comes from the next model", async () => {
+    const { fetchImpl, calls } = byModel({
+      "gpt-4.1": fail500,
+      "deepseek-v4-pro": async () => jsonResponse(okBody("from fallback")),
+    });
+    const client = createHttpAiClient({
+      baseUrl: "http://x",
+      fetchImpl,
+      sink: () => {},
+      fallbackModels: ["deepseek-v4-pro", "deepseek-v4-flash"],
+      modelCaps: APPROVED_MODEL_CAPS,
+    });
+    const result = await client.chat({ ...REQUEST, model: "gpt-4.1", max_tokens: 50000 });
+    expect(result.content).toBe("from fallback");
+    // primary tried MAX_ATTEMPTS times, then the fallback once
+    expect(calls.filter((c) => c.model === "gpt-4.1")).toHaveLength(MAX_ATTEMPTS);
+    expect(calls[calls.length - 1]?.model).toBe("deepseek-v4-pro");
+  });
+
+  test("(b) the fallback call's max_tokens is clamped to the fallback model's cap (30000)", async () => {
+    const { fetchImpl, calls } = byModel({
+      "gpt-4.1": fail500,
+      "deepseek-v4-pro": async () => jsonResponse(okBody("ok")),
+    });
+    const client = createHttpAiClient({
+      baseUrl: "http://x",
+      fetchImpl,
+      sink: () => {},
+      fallbackModels: ["deepseek-v4-pro"],
+      modelCaps: APPROVED_MODEL_CAPS,
+    });
+    await client.chat({ ...REQUEST, model: "gpt-4.1", max_tokens: 50000 });
+    // primary keeps its own 50000 budget; the fallback is clamped to 30000
+    expect(calls.find((c) => c.model === "gpt-4.1")?.maxTokens).toBe(50000);
+    expect(calls.find((c) => c.model === "deepseek-v4-pro")?.maxTokens).toBe(30000);
+  });
+
+  test("(c) a primary equal to a fallback id is de-duped out (not retried as a fallback)", async () => {
+    const { fetchImpl, calls } = byModel({
+      "deepseek-v4-pro": fail500,
+      "deepseek-v4-flash": async () => jsonResponse(okBody("flash win")),
+    });
+    const client = createHttpAiClient({
+      baseUrl: "http://x",
+      fetchImpl,
+      sink: () => {},
+      fallbackModels: ["deepseek-v4-pro", "deepseek-v4-flash"],
+      modelCaps: APPROVED_MODEL_CAPS,
+    });
+    const result = await client.chat({
+      ...REQUEST,
+      model: "deepseek-v4-pro",
+      max_tokens: 30000,
+    });
+    expect(result.content).toBe("flash win");
+    // deepseek-v4-pro is only ever the primary → exactly MAX_ATTEMPTS calls, no more
+    expect(calls.filter((c) => c.model === "deepseek-v4-pro")).toHaveLength(MAX_ATTEMPTS);
+    expect(calls.filter((c) => c.model === "deepseek-v4-flash")).toHaveLength(1);
+  });
+
+  test("(d) a non-retryable 4xx does NOT fall back — it throws as today", async () => {
+    const { fetchImpl, calls } = byModel({
+      "gpt-4.1": async () => jsonResponse({ success: false, error: "bad request" }, 400),
+      "deepseek-v4-pro": async () => jsonResponse(okBody("must not be reached")),
+    });
+    const client = createHttpAiClient({
+      baseUrl: "http://x",
+      fetchImpl,
+      sink: () => {},
+      fallbackModels: ["deepseek-v4-pro"],
+      modelCaps: APPROVED_MODEL_CAPS,
+    });
+    await expect(
+      client.chat({ ...REQUEST, model: "gpt-4.1", max_tokens: 50000 }),
+    ).rejects.toThrow(AiLayerError);
+    // 4xx is not retried and not fallen back on: exactly one call, primary only
+    expect(calls).toHaveLength(1);
+    expect(calls.every((c) => c.model === "gpt-4.1")).toBe(true);
+  });
+
+  test("(e) an empty fallback chain fails as today (no fallback attempts)", async () => {
+    const { fetchImpl, calls } = byModel({ "gpt-4.1": fail500 });
+    const client = createHttpAiClient({
+      baseUrl: "http://x",
+      fetchImpl,
+      sink: () => {},
+      fallbackModels: [],
+      modelCaps: APPROVED_MODEL_CAPS,
+    });
+    const error = (await client
+      .chat({ ...REQUEST, model: "gpt-4.1", max_tokens: 50000 })
+      .catch((e: unknown) => e)) as AiLayerError;
+    expect(error).toBeInstanceOf(AiLayerError);
+    expect(error.code).toBe("AI_UNAVAILABLE");
+    expect(calls).toHaveLength(MAX_ATTEMPTS);
+    expect(calls.every((c) => c.model === "gpt-4.1")).toBe(true);
+  });
+
+  test("(D6d) a fallback attempt is marked fallback:true in the log; primary lines are not", async () => {
+    const lines: string[] = [];
+    const { fetchImpl } = byModel({
+      "gpt-4.1": fail500,
+      "deepseek-v4-pro": async () => jsonResponse(okBody("ok")),
+    });
+    const client = createHttpAiClient({
+      baseUrl: "http://x",
+      fetchImpl,
+      sink: (line) => lines.push(line),
+      fallbackModels: ["deepseek-v4-pro"],
+      modelCaps: APPROVED_MODEL_CAPS,
+    });
+    await client.chat({ ...REQUEST, model: "gpt-4.1", max_tokens: 50000 });
+    const entries = lines.map((l) => JSON.parse(l));
+    // primary attempts: gpt-4.1, no fallback marker
+    const primary = entries.filter((e) => e.model === "gpt-4.1");
+    expect(primary.length).toBe(MAX_ATTEMPTS);
+    expect(primary.every((e) => e.fallback === undefined)).toBe(true);
+    // the successful fallback attempt carries fallback:true
+    const fallbackOk = entries.find((e) => e.outcome === "ok");
+    expect(fallbackOk?.fallback).toBe(true);
   });
 });
 

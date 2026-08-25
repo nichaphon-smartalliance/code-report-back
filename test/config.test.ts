@@ -131,7 +131,71 @@ describe("per-stage AI settings (SPEC-007 / TASK-025)", () => {
   });
 });
 
+describe("model-level fallback chain (SPEC-007 §Fallback / Req-7)", () => {
+  test("defaults to deepseek-v4-pro,deepseek-v4-flash when absent", () => {
+    expect(loadConfig(MINIMAL).fallbackModels).toEqual([
+      "deepseek-v4-pro",
+      "deepseek-v4-flash",
+    ]);
+  });
+
+  test("an explicit empty value disables fallback (legal, not a ConfigError)", () => {
+    expect(
+      loadConfig({ ...MINIMAL, AI_FALLBACK_MODELS: "" }).fallbackModels,
+    ).toEqual([]);
+    // A blank/whitespace value is also disabled, never an error.
+    expect(
+      loadConfig({ ...MINIMAL, AI_FALLBACK_MODELS: "   " }).fallbackModels,
+    ).toEqual([]);
+  });
+
+  test("parses an ordered chain, trimming whitespace and dropping blanks", () => {
+    expect(
+      loadConfig({
+        ...MINIMAL,
+        AI_FALLBACK_MODELS: " deepseek-v4-flash , , deepseek-v4-pro ",
+      }).fallbackModels,
+    ).toEqual(["deepseek-v4-flash", "deepseek-v4-pro"]);
+  });
+
+  test("rejects an unknown fallback model id with a fatal ConfigError", () => {
+    expect(() =>
+      loadConfig({ ...MINIMAL, AI_FALLBACK_MODELS: "deepseek-v4-pro,gpt-9000" }),
+    ).toThrow(ConfigError);
+    expect(() =>
+      loadConfig({ ...MINIMAL, AI_FALLBACK_MODELS: "deepseek-v4-pro,gpt-9000" }),
+    ).toThrow(/AI_FALLBACK_MODELS/);
+  });
+
+  test("deepseek-v4-flash is now a valid stage model (cap 30000)", () => {
+    const config = loadConfig({
+      ...MINIMAL,
+      AI_PROJECT_MODEL: "deepseek-v4-flash",
+      AI_PROJECT_MAX_TOKENS: "30000",
+    });
+    expect(config.aiStages.AI_PROJECT).toEqual({
+      model: "deepseek-v4-flash",
+      maxTokens: 30000,
+    });
+    // ...but still capped at 30000: 30001 is fatal.
+    expect(() =>
+      loadConfig({
+        ...MINIMAL,
+        AI_PROJECT_MODEL: "deepseek-v4-flash",
+        AI_PROJECT_MAX_TOKENS: "30001",
+      }),
+    ).toThrow(/AI_PROJECT_MAX_TOKENS/);
+  });
+});
+
 describe("describeConfig", () => {
+  test("reports the fallback chain (not a secret)", () => {
+    expect(describeConfig(loadConfig(MINIMAL)).fallbackModels).toEqual([
+      "deepseek-v4-pro",
+      "deepseek-v4-flash",
+    ]);
+  });
+
   test("never exposes secret values", () => {
     const described = JSON.stringify(
       describeConfig(

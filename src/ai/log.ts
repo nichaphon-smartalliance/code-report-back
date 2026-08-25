@@ -26,6 +26,12 @@ export type AiCallLogEntry = {
   completionTokens?: number;
   totalTokens?: number;
   latencyMs?: number;
+  /**
+   * `true` when this attempt used a model-level fallback model rather than the
+   * stage's primary (SPEC-007 §Fallback / D6d, observability). Omitted on
+   * primary attempts so their log lines are unchanged.
+   */
+  fallback?: boolean | undefined;
   /** Short failure reason, never a response body. */
   outcome: "ok" | "timeout" | "http-error" | "service-error" | "network-error";
 };

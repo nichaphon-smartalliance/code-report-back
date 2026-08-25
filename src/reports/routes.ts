@@ -17,7 +17,7 @@
 import { Hono } from "hono";
 import type { SessionEnv } from "../auth/middleware.ts";
 import { createHttpAiClient } from "../ai/client.ts";
-import { loadConfigOrExit } from "../config.ts";
+import { APPROVED_MODEL_CAPS, loadConfigOrExit } from "../config.ts";
 import {
   errorEnvelope,
   fieldMessage,
@@ -67,6 +67,8 @@ function productionDeps(): ReportDeps {
             baseUrl: config.AI_API_CENTER_URL,
             token: config.AI_API_CENTER_TOKEN,
             logBase: { jobId, userId },
+            fallbackModels: config.fallbackModels,
+            modelCaps: APPROVED_MODEL_CAPS,
           }),
         aiStages: config.aiStages,
         aiCuriosityMaxIterations: config.aiCuriosityMaxIterations,

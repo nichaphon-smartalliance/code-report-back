@@ -97,6 +97,20 @@ export type HttpAiClientOptions = {
   timeoutMs?: number;
   /** Correlation ids merged into every log line (TASK-005 §7). */
   logBase?: AiLogBaseFields;
+  /**
+   * Ordered model-level fallback chain (SPEC-007 §Fallback / D6, Req-7). Each is
+   * tried, in order, after the primary model exhausts on a provider/model-side
+   * failure. Empty/absent = today's behaviour (no fallback). Wired by
+   * `routes.ts` from `Config.fallbackModels`; the client stays config-free.
+   */
+  fallbackModels?: string[];
+  /**
+   * Approved model → per-call `max_tokens` cap, used to clamp a fallback call to
+   * the fallback model's cap (SPEC-007 D6b). Passed in by `routes.ts` so the ai
+   * layer never imports `config.ts`. A model absent from the table is not
+   * clamped.
+   */
+  modelCaps?: Record<string, number>;
 };
 
 /** A failed attempt, classified for the retry decision and the log line. */
@@ -108,6 +122,32 @@ type Failure = {
 
 function isFailure(value: unknown): value is Failure {
   return typeof value === "object" && value !== null && "outcome" in value;
+}
+
+/**
+ * The ordered model chain for one call (SPEC-007 D6c): the request's primary
+ * model first, then the configured fallbacks, de-duped preserving order — a
+ * fallback equal to the primary (or repeated) is dropped, since retrying the
+ * same model is pointless.
+ */
+export function buildModelChain(primary: string, fallbacks: string[]): string[] {
+  const chain = [primary];
+  for (const model of fallbacks) {
+    if (!chain.includes(model)) chain.push(model);
+  }
+  return chain;
+}
+
+/**
+ * Whether an exhausted model should advance to the next fallback (SPEC-007 D6a).
+ * Fall back only on a provider/model-side exhaustion — the `retryable` failure
+ * family (`timeout`/`network-error`/`http-error` 5xx/`service-error`
+ * `success:false`), all of which today end in `AI_UNAVAILABLE`. A non-retryable
+ * failure (a 4xx we built wrong, or a malformed *response*) fails identically on
+ * any model, so it does **not** fall back — matching today's throw.
+ */
+export function shouldFallBack(failure: Failure): boolean {
+  return failure.retryable === true;
 }
 
 function parseResult(payload: unknown): ChatResult | Failure {
@@ -212,36 +252,81 @@ export function createHttpAiClient(options: HttpAiClientOptions): AiClient {
     }
   }
 
-  return {
-    async chat(request: ChatRequest): Promise<ChatResult> {
-      let last: Failure | undefined;
-      for (let tryNumber = 1; tryNumber <= MAX_ATTEMPTS; tryNumber += 1) {
-        const outcome = await attempt(request);
-        if (!isFailure(outcome)) {
-          logAiCall(
-            {
-              stage: request.stage,
-              attempt: tryNumber,
-              outcome: "ok",
-              provider: outcome.provider,
-              model: outcome.model,
-              promptTokens: outcome.usage.prompt_tokens,
-              completionTokens: outcome.usage.completion_tokens,
-              totalTokens: outcome.usage.total_tokens,
-              latencyMs: outcome.latency_ms,
-            },
-            sink,
-            logBase,
-          );
-          return outcome;
-        }
+  const fallbackModels = options.fallbackModels ?? [];
+  const modelCaps = options.modelCaps ?? {};
+
+  /**
+   * Run the existing per-model retry loop (`MAX_ATTEMPTS`) against one model.
+   * Returns the success, or the last `Failure` (never throws) so the caller can
+   * decide whether to advance to the next fallback model. `isFallback` only
+   * affects the log line (SPEC-007 D6d marker).
+   */
+  async function runModel(
+    request: ChatRequest,
+    isFallback: boolean,
+  ): Promise<ChatResult | Failure> {
+    const fallback = isFallback ? true : undefined;
+    let last: Failure | undefined;
+    for (let tryNumber = 1; tryNumber <= MAX_ATTEMPTS; tryNumber += 1) {
+      const outcome = await attempt(request);
+      if (!isFailure(outcome)) {
         logAiCall(
-          { stage: request.stage, attempt: tryNumber, outcome: outcome.outcome },
+          {
+            stage: request.stage,
+            attempt: tryNumber,
+            outcome: "ok",
+            provider: outcome.provider,
+            model: outcome.model,
+            promptTokens: outcome.usage.prompt_tokens,
+            completionTokens: outcome.usage.completion_tokens,
+            totalTokens: outcome.usage.total_tokens,
+            latencyMs: outcome.latency_ms,
+            fallback,
+          },
           sink,
           logBase,
         );
+        return outcome;
+      }
+      logAiCall(
+        {
+          stage: request.stage,
+          attempt: tryNumber,
+          outcome: outcome.outcome,
+          // The model actually tried on this attempt (SPEC-007 D6d).
+          model: request.model,
+          fallback,
+        },
+        sink,
+        logBase,
+      );
+      last = outcome;
+      if (!outcome.retryable) break;
+    }
+    // MAX_ATTEMPTS >= 1, so `last` is always set once the loop ran.
+    return last as Failure;
+  }
+
+  return {
+    async chat(request: ChatRequest): Promise<ChatResult> {
+      const chain = buildModelChain(request.model, fallbackModels);
+      let last: Failure | undefined;
+      for (let index = 0; index < chain.length; index += 1) {
+        const model = chain[index] as string;
+        const isFallback = index > 0;
+        const cap = modelCaps[model];
+        // SPEC-007 D6b: a fallback call honours the fallback model's per-call
+        // cap; an uncapped/unknown model keeps the request's own budget.
+        const maxTokens =
+          cap !== undefined ? Math.min(request.max_tokens, cap) : request.max_tokens;
+        const outcome = await runModel(
+          { ...request, model, max_tokens: maxTokens },
+          isFallback,
+        );
+        if (!isFailure(outcome)) return outcome;
         last = outcome;
-        if (!outcome.retryable) break;
+        // Only a provider/model-side exhaustion advances to the next model.
+        if (!shouldFallBack(outcome)) break;
       }
       throw new AiLayerError("AI_UNAVAILABLE", { detail: last?.detail });
     },
