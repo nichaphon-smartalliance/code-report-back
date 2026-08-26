@@ -65,6 +65,7 @@ export type JobStatus = (typeof JOB_STATUSES)[number];
 export type JobRequest = {
   userId: string;
   repoUrl: string;
+  pat?: string | undefined;
   branch?: string | undefined;
   author?: string | undefined;
   /** `YYYY-MM-DD` — the wire, storage and `ReportParams` format everywhere. */

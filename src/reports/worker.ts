@@ -201,6 +201,7 @@ export function createReportWorker(options: WorkerOptions): ReportWorker {
         });
 
         await reportStage("READING_COMMITS");
+        console.log("options pat:", pat ? "<redacted>" : "<none>");
         const commits = await readCommits(clone.dir, {
           ...(job.branch === undefined ? {} : { branch: job.branch }),
           dateFrom: job.dateFrom,
@@ -208,6 +209,7 @@ export function createReportWorker(options: WorkerOptions): ReportWorker {
           ...(job.author === undefined ? {} : { author: job.author }),
           timeZone: options.timeZone,
           ...(runner === undefined ? {} : { runner }),
+          ...(pat === undefined ? {} : { pat }),
         });
 
         if (commits.length === 0) {

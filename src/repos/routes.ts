@@ -154,6 +154,7 @@ export function createRepoRoutes(deps?: RepoDeps): Hono<SessionEnv> {
 
     const { allowPrivateHosts, gitRunner, lookup, lsRemoteTimeoutMs } = resolve();
     try {
+      console.log("pat:", validated.value.pat ? "<redacted>" : "<none>");
       const result = await listRemoteBranches({
         repoUrl: validated.value.repoUrl,
         pat: validated.value.pat,

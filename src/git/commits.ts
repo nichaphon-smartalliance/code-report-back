@@ -9,6 +9,7 @@
  */
 
 import { GitLayerError } from "./errors.ts";
+import { authorizationHeader } from "./index.ts";
 import { firstMeaningfulLine, runGit, type GitRunner } from "./run.ts";
 
 /** A commit touching more than this contributes stats only, no diff body. */
@@ -194,6 +195,7 @@ export type ReadCommitsOptions = {
   dateTo: string;
   author?: string;
   timeZone: string;
+  pat?: string;
   /** Set false to skip `git show` entirely (metadata-only callers). */
   includeDiffs?: boolean;
   runner?: GitRunner;
@@ -208,7 +210,11 @@ export function commitLogArgs(
     options.dateTo,
     options.timeZone,
   );
-  const args = ["-C", dir, "log"];
+  const args = ["-C", dir];
+  // ใส่ auth ตรงนี้ (ก่อน log)
+  if (options.pat !== undefined) args.push("-c", `http.extraHeader=${authorizationHeader(options.pat)}`);
+  // ค่อยใส่ subcommand
+  args.push("log");
   if (options.branch !== undefined) args.push(options.branch);
   args.push(`--since=${since}`, `--until=${until}`);
   if (options.author !== undefined && options.author.trim() !== "") {
@@ -218,7 +224,12 @@ export function commitLogArgs(
       "--regexp-ignore-case",
     );
   }
-  args.push("--no-merges", "--numstat", "--date=iso-strict", `--format=${LOG_FORMAT}`);
+  args.push(
+    "--no-merges",
+    "--numstat",
+    "--date=iso-strict",
+    `--format=${LOG_FORMAT}`,
+  );
   return args;
 }
 
@@ -274,6 +285,7 @@ export function classifyLogFailure(
   }
   // SPEC-001's "any other git failure". The stderr has already been through
   // runGit's redactor, so the detail is safe to store and show.
+  console.log("git log failed with unclassified stderr:", stderr);
   return new GitLayerError("CLONE_FAILED", {
     detail: firstMeaningfulLine(stderr),
   });
@@ -290,8 +302,11 @@ export async function readCommits(
   options: ReadCommitsOptions,
 ): Promise<Commit[]> {
   const runner = options.runner ?? runGit;
+  console.log("reading commits in", dir, "with options", options);
   const log = await runner(commitLogArgs(dir, options));
+  console.log("git log", log);
   if (log.exitCode !== 0) {
+    console.log("git log failed with exit code", log.exitCode);
     throw classifyLogFailure(log.stderr, { branch: options.branch });
   }
 
