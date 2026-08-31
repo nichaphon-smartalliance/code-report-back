@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "bun --watch src/index.ts",
     "start": "bun src/index.ts",
+    "build": "bun build src/index.ts --compile --minify --outfile dist/code-report-back",
     "typecheck": "tsc --noEmit",
     "migrate": "bun src/db/migrate.ts",
     "seed:users": "bun src/scripts/seed-users.ts",
